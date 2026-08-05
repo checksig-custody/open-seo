@@ -1,13 +1,5 @@
 import { isEnabled, type Phase0Config } from "../phase0-env";
-import {
-  checkBudget,
-  crossedThreshold,
-  detectUnexpectedSpend,
-  levelFor,
-  microsToUsd,
-  projectMonthEndMicros,
-  type BudgetLevel,
-} from "./budget";
+import { checkBudget } from "./budget";
 import { fixtureKeywords, fixtureOverview, fixturePages } from "./fixtures";
 import {
   computeDeltas,
@@ -16,6 +8,9 @@ import {
   type VisibilityShareOutcome,
 } from "./metrics";
 import * as store from "./store";
+import * as ledger from "./ledger-store";
+import type { SnapshotKeywordRow, SnapshotPageRow } from "./store";
+import { getEnvValueSync } from "@/server/lib/runtime-env";
 
 /**
  * Morgana Search Intelligence — orchestration.
@@ -66,8 +61,10 @@ function limitsFrom(config: Phase0Config) {
 
 function credentialPresent(env: object): boolean {
   const value =
-    (env as Record<string, unknown>).DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY ??
-    (env as Record<string, unknown>).DATAFORSEO_API_KEY;
+    // getEnvValueSync reads an interface-typed env without an assertion and
+    // applies the Morgana credential alias, so there is nothing to cast.
+    getEnvValueSync(env, "DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY") ??
+    getEnvValueSync(env, "DATAFORSEO_API_KEY");
   return typeof value === "string" && value.trim() !== "";
 }
 
@@ -195,7 +192,7 @@ export async function refreshEntity(
       estimatedCostMicros: 0,
       actualCostMicros: 0,
     });
-    await store.recordUsage({
+    await ledger.recordUsage({
       day: snapshotDate,
       entityId: entity.id,
       endpointPath: "fixture/domain_overview",
@@ -231,7 +228,7 @@ export async function refreshEntity(
     };
   }
 
-  const budgetState = await store.readBudgetState(month);
+  const budgetState = await ledger.readBudgetState(month);
   const decision = checkBudget(
     limitsFrom(config),
     {
@@ -246,7 +243,7 @@ export async function refreshEntity(
     now,
   );
   if (!decision.allowed) {
-    await store.recordUsage({
+    await ledger.recordUsage({
       day: snapshotDate,
       entityId: entity.id,
       endpointPath: "dataforseo_labs/google/domain_rank_overview/live",
@@ -314,8 +311,11 @@ export interface DomainOverview {
     rankSignal: number | null;
   } | null;
   deltas: DeltaSet | null;
-  topKeywords: unknown[];
-  topPages: unknown[];
+  // Drizzle's inferred row types rather than `unknown[]`: the store already
+  // knows the shape, which lets callers read `topKeywords[0]?.keyword` without
+  // asserting anything.
+  topKeywords: SnapshotKeywordRow[];
+  topPages: SnapshotPageRow[];
   freshness: "fresh" | "stale" | "none";
 }
 
@@ -439,105 +439,12 @@ export async function compareDomains(
         deltas: o.deltas,
         visibilityShare: share?.share ?? null,
         visibilityShareStatus: share?.status ?? "insufficient_data",
-        topKeyword:
-          (o.topKeywords[0] as { keyword?: string } | undefined)?.keyword ??
-          null,
-        topPage: (o.topPages[0] as { url?: string } | undefined)?.url ?? null,
+        topKeyword: o.topKeywords[0]?.keyword ?? null,
+        topPage: o.topPages[0]?.url ?? null,
         freshness: o.freshness,
       };
     }),
     visibility,
-  };
-}
-
-interface CostStatus {
-  costCentre: string;
-  providerStatus: ProviderStatus;
-  paidCallsEnabled: boolean;
-  level: BudgetLevel;
-  monthlyPercent: number;
-  requests: number;
-  meteredRequests: number;
-  freeRequests: number;
-  paidSubmissions: number;
-  freePollRequests: number;
-  resultFetchRequests: number;
-  failedRequests: number;
-  retryRequests: number;
-  estimatedCostUsd: number;
-  actualCostUsd: number;
-  dailyCostUsd: number;
-  dailyCostCapUsd: number;
-  monthlyCostCapUsd: number;
-  budgetRemainingUsd: number;
-  projectedMonthEndCostUsd: number;
-  cacheHits: number;
-  cacheMisses: number;
-  cacheHitRate: number | null;
-  blockedByBudget: number;
-  unexpectedSpendDetected: boolean;
-  pendingAlertThreshold: number | null;
-}
-
-export async function costStatus(
-  config: Phase0Config,
-  env: object,
-  now: Date = new Date(),
-): Promise<CostStatus> {
-  const day = store.snapshotDateFor(now);
-  const month = monthOf(day);
-  const [totals, dayTotals, state] = await Promise.all([
-    store.ledgerTotals(month),
-    store.ledgerTotals(day),
-    store.readBudgetState(month),
-  ]);
-  const monthlyCap = config.SEO_DATAFORSEO_MONTHLY_COST_CAP_USD;
-  const monthlyPercent =
-    monthlyCap > 0 ? (totals.actualCostMicros / monthlyCap) * 100 : 0;
-  const paidCallsEnabled = isEnabled(
-    config.SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED,
-  );
-  const cacheTotal = totals.cacheHits + totals.cacheMisses;
-
-  return {
-    costCentre: "dataforseo_search_intelligence",
-    providerStatus: resolveProviderStatus(config, env),
-    paidCallsEnabled,
-    level: levelFor(monthlyPercent),
-    monthlyPercent,
-    requests: totals.requests,
-    meteredRequests: totals.meteredRequests,
-    // Free calls are reported separately and never ration paid work.
-    freeRequests: Math.max(0, totals.requests - totals.meteredRequests),
-    paidSubmissions: totals.paidSubmissions,
-    freePollRequests: totals.freePollRequests,
-    resultFetchRequests: totals.resultFetchRequests,
-    failedRequests: totals.failedRequests,
-    retryRequests: totals.retryRequests,
-    estimatedCostUsd: microsToUsd(totals.estimatedCostMicros),
-    actualCostUsd: microsToUsd(totals.actualCostMicros),
-    dailyCostUsd: microsToUsd(dayTotals.actualCostMicros),
-    dailyCostCapUsd: microsToUsd(config.SEO_DATAFORSEO_DAILY_COST_CAP_USD),
-    monthlyCostCapUsd: microsToUsd(monthlyCap),
-    budgetRemainingUsd: microsToUsd(
-      Math.max(0, monthlyCap - totals.actualCostMicros),
-    ),
-    projectedMonthEndCostUsd: microsToUsd(
-      projectMonthEndMicros(totals.actualCostMicros, now),
-    ),
-    cacheHits: totals.cacheHits,
-    cacheMisses: totals.cacheMisses,
-    cacheHitRate: cacheTotal > 0 ? totals.cacheHits / cacheTotal : null,
-    blockedByBudget: totals.blockedByBudget,
-    unexpectedSpendDetected: detectUnexpectedSpend(
-      paidCallsEnabled,
-      totals.meteredRequests,
-      totals.actualCostMicros,
-    ),
-    pendingAlertThreshold: crossedThreshold(
-      monthlyPercent,
-      state.lastAlertThreshold,
-    ),
   };
 }
 

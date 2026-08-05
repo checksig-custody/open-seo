@@ -195,7 +195,7 @@ export function normalizePageUrl(input: string): string {
   }
   parsed.hash = "";
   parsed.hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
-  for (const key of [...parsed.searchParams.keys()]) {
+  for (const key of Array.from(parsed.searchParams.keys())) {
     if (TRACKING_PARAMS.has(key.toLowerCase())) {
       parsed.searchParams.delete(key);
     }

@@ -46,6 +46,13 @@ interface FixturePage {
   pageTitle: string;
 }
 
+const SEARCH_INTENTS = [
+  "informational",
+  "commercial",
+  "transactional",
+  "navigational",
+] as const;
+
 /** Stable 32-bit hash. Not cryptographic — determinism is the only goal. */
 function hash(input: string): number {
   let h = 2166136261;
@@ -129,16 +136,12 @@ export function fixtureKeywords(
       estimatedTraffic: between(`${seed}|etv`, 0, 5_000),
       cpc: between(`${seed}|cpc`, 0, 900) / 100,
       keywordDifficulty: between(`${seed}|kd`, 1, 100),
-      searchIntent: [
-        "informational",
-        "commercial",
-        "transactional",
-        "navigational",
-      ][between(`${seed}|intent`, 0, 3)] as string,
+      searchIntent:
+        SEARCH_INTENTS[between(`${seed}|intent`, 0, 3)] ?? "informational",
       rankingUrl: `https://${domain}/${keyword.replace(/\s+/g, "-")}`,
     });
   }
-  return out.sort((a, b) => b.estimatedTraffic - a.estimatedTraffic);
+  return out.toSorted((a, b) => b.estimatedTraffic - a.estimatedTraffic);
 }
 
 export function fixturePages(
@@ -173,5 +176,5 @@ export function fixturePages(
       pageTitle: `${path || "Home"} — ${domain}`,
     });
   }
-  return out.sort((a, b) => b.estimatedTraffic - a.estimatedTraffic);
+  return out.toSorted((a, b) => b.estimatedTraffic - a.estimatedTraffic);
 }

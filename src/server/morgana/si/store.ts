@@ -1,17 +1,15 @@
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte } from "drizzle-orm";
 import { db } from "@/db";
 import {
   domainRefreshJobs,
   domainSnapshotKeywords,
   domainSnapshotPages,
   domainSnapshots,
-  searchBudgetState,
   searchEntities,
-  searchUsageLedger,
 } from "@/db/schema";
-import { isMetered, type MeteringClass } from "./budget";
 import { normalizeEntityDomain, normalizePageUrl } from "./domains";
 import type { SnapshotPoint } from "./metrics";
+import { newId, nowIso } from "./ids";
 
 /**
  * Morgana Search Intelligence — persistence.
@@ -25,28 +23,12 @@ import type { SnapshotPoint } from "./metrics";
  * rather than a read-then-write race.
  */
 
-export type EntityType = "primary" | "competitor" | "watch";
-export type Priority = "high" | "normal" | "low";
+type EntityType = "primary" | "competitor" | "watch";
+type Priority = "high" | "normal" | "low";
 
-export interface SearchEntityRow {
-  id: string;
-  displayName: string;
-  canonicalDomain: string;
-  normalizedDomain: string;
-  entityType: EntityType;
-  enabled: boolean;
-  priority: Priority;
-  includeSubdomains: boolean;
-  locationCode: number;
-  languageCode: string;
-  refreshIntervalHours: number;
-  backlinkIntervalHours: number;
-  lastRefreshedAt: string | null;
-  lastBacklinkRefreshedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-  disabledAt: string | null;
-}
+export type SearchEntityRow = typeof searchEntities.$inferSelect;
+export type SnapshotKeywordRow = typeof domainSnapshotKeywords.$inferSelect;
+export type SnapshotPageRow = typeof domainSnapshotPages.$inferSelect;
 
 interface CreateEntityInput {
   displayName: string;
@@ -58,14 +40,6 @@ interface CreateEntityInput {
   languageCode?: string;
   refreshIntervalHours?: number;
   backlinkIntervalHours?: number;
-}
-
-function newId(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
-}
-
-function nowIso(): string {
-  return new Date().toISOString();
 }
 
 /** UTC date bucket. Snapshots are keyed by day, not by instant. */
@@ -84,7 +58,7 @@ export async function listEntities(
     .select()
     .from(searchEntities)
     .orderBy(searchEntities.entityType, searchEntities.displayName);
-  const all = rows as unknown as SearchEntityRow[];
+  const all = rows;
   return options.includeDisabled ? all : all.filter((row) => row.enabled);
 }
 
@@ -94,7 +68,7 @@ export async function getEntity(id: string): Promise<SearchEntityRow | null> {
     .from(searchEntities)
     .where(eq(searchEntities.id, id))
     .limit(1);
-  return (rows[0] as unknown as SearchEntityRow | undefined) ?? null;
+  return rows[0] ?? null;
 }
 
 export async function createEntity(
@@ -475,172 +449,3 @@ export async function recentJobs(limit = 50) {
     .orderBy(desc(domainRefreshJobs.createdAt))
     .limit(limit);
 }
-
-// --- usage ledger and budget state -----------------------------------------
-
-interface RecordUsageInput {
-  day: string;
-  entityId?: string | null;
-  endpointPath: string;
-  meteringClass: MeteringClass;
-  estimatedCostMicros?: number;
-  actualCostMicros?: number;
-  failed?: boolean;
-  retry?: boolean;
-  blockedByBudget?: boolean;
-}
-
-/**
- * Record one call against the ledger.
- *
- * `requests` always increments; `metered_requests` only for classes that
- * actually consume an allowance. That separation is the whole point (decision
- * #84): free lifecycle polls must never ration paid work.
- */
-export async function recordUsage(input: RecordUsageInput): Promise<void> {
-  const metered = isMetered(input.meteringClass) ? 1 : 0;
-  const isCache = input.meteringClass === "cache";
-  const values = {
-    id: newId("ul"),
-    day: input.day,
-    entityId: input.entityId ?? null,
-    endpointPath: input.endpointPath,
-    meteringClass: input.meteringClass,
-    requests: isCache ? 0 : 1,
-    meteredRequests: metered,
-    failedRequests: input.failed ? 1 : 0,
-    retryRequests: input.retry ? 1 : 0,
-    estimatedCostMicros: input.estimatedCostMicros ?? 0,
-    actualCostMicros: input.actualCostMicros ?? 0,
-    cacheHits: isCache ? 1 : 0,
-    cacheMisses: isCache ? 0 : 1,
-    blockedByBudget: input.blockedByBudget ? 1 : 0,
-    updatedAt: nowIso(),
-  };
-  await db
-    .insert(searchUsageLedger)
-    .values(values)
-    .onConflictDoUpdate({
-      target: [
-        searchUsageLedger.day,
-        searchUsageLedger.endpointPath,
-        searchUsageLedger.meteringClass,
-      ],
-      set: {
-        requests: sql`${searchUsageLedger.requests} + ${values.requests}`,
-        meteredRequests: sql`${searchUsageLedger.meteredRequests} + ${values.meteredRequests}`,
-        failedRequests: sql`${searchUsageLedger.failedRequests} + ${values.failedRequests}`,
-        retryRequests: sql`${searchUsageLedger.retryRequests} + ${values.retryRequests}`,
-        estimatedCostMicros: sql`${searchUsageLedger.estimatedCostMicros} + ${values.estimatedCostMicros}`,
-        actualCostMicros: sql`${searchUsageLedger.actualCostMicros} + ${values.actualCostMicros}`,
-        cacheHits: sql`${searchUsageLedger.cacheHits} + ${values.cacheHits}`,
-        cacheMisses: sql`${searchUsageLedger.cacheMisses} + ${values.cacheMisses}`,
-        blockedByBudget: sql`${searchUsageLedger.blockedByBudget} + ${values.blockedByBudget}`,
-        updatedAt: values.updatedAt,
-      },
-    });
-}
-
-interface LedgerTotals {
-  requests: number;
-  meteredRequests: number;
-  paidSubmissions: number;
-  freePollRequests: number;
-  resultFetchRequests: number;
-  failedRequests: number;
-  retryRequests: number;
-  estimatedCostMicros: number;
-  actualCostMicros: number;
-  cacheHits: number;
-  cacheMisses: number;
-  blockedByBudget: number;
-}
-
-const ZERO_TOTALS: LedgerTotals = {
-  requests: 0,
-  meteredRequests: 0,
-  paidSubmissions: 0,
-  freePollRequests: 0,
-  resultFetchRequests: 0,
-  failedRequests: 0,
-  retryRequests: 0,
-  estimatedCostMicros: 0,
-  actualCostMicros: 0,
-  cacheHits: 0,
-  cacheMisses: 0,
-  blockedByBudget: 0,
-};
-
-/** Ledger totals for a month (`YYYY-MM`) or a single day (`YYYY-MM-DD`). */
-export async function ledgerTotals(prefix: string): Promise<LedgerTotals> {
-  const rows = await db
-    .select()
-    .from(searchUsageLedger)
-    .where(sql`${searchUsageLedger.day} LIKE ${`${prefix}%`}`);
-  const totals: LedgerTotals = { ...ZERO_TOTALS };
-  for (const row of rows as unknown as {
-    meteringClass: MeteringClass;
-    requests: number;
-    meteredRequests: number;
-    failedRequests: number;
-    retryRequests: number;
-    estimatedCostMicros: number;
-    actualCostMicros: number;
-    cacheHits: number;
-    cacheMisses: number;
-    blockedByBudget: number;
-  }[]) {
-    totals.requests += row.requests;
-    totals.meteredRequests += row.meteredRequests;
-    totals.failedRequests += row.failedRequests;
-    totals.retryRequests += row.retryRequests;
-    totals.estimatedCostMicros += row.estimatedCostMicros;
-    totals.actualCostMicros += row.actualCostMicros;
-    totals.cacheHits += row.cacheHits;
-    totals.cacheMisses += row.cacheMisses;
-    totals.blockedByBudget += row.blockedByBudget;
-    if (row.meteringClass === "paid_submission")
-      totals.paidSubmissions += row.requests;
-    if (row.meteringClass === "free_poll")
-      totals.freePollRequests += row.requests;
-    if (row.meteringClass === "result_fetch")
-      totals.resultFetchRequests += row.requests;
-  }
-  return totals;
-}
-
-interface BudgetStateRow {
-  month: string;
-  monthlyCostMicros: number;
-  currentDay: string | null;
-  dailyCostMicros: number;
-  consecutiveFailures: number;
-  circuitOpenedAt: string | null;
-  lastAlertThreshold: number | null;
-}
-
-export async function readBudgetState(month: string): Promise<BudgetStateRow> {
-  const rows = await db
-    .select()
-    .from(searchBudgetState)
-    .where(eq(searchBudgetState.month, month))
-    .limit(1);
-  const row = rows[0] as unknown as BudgetStateRow | undefined;
-  return (
-    row ?? {
-      month,
-      monthlyCostMicros: 0,
-      currentDay: null,
-      dailyCostMicros: 0,
-      consecutiveFailures: 0,
-      circuitOpenedAt: null,
-      lastAlertThreshold: null,
-    }
-  );
-}
-
-// NOTE: the budget WRITE path (accruing spend, tripping the breaker, recording an
-// announced alert threshold) is deliberately absent. Nothing can call it: live
-// collection is not implemented in phase 1, so there is no spend to accrue. It
-// belongs with the live collector, and shipping it now would be unreachable code
-// that knip is right to reject. The READ path above is used and tested.

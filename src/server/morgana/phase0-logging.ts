@@ -39,11 +39,24 @@ export function incrementCounter(name: Phase0Counter, by = 1): void {
 }
 
 export function readCounters(): Record<Phase0Counter, number> {
-  const snapshot = {} as Record<Phase0Counter, number>;
-  for (const name of PHASE0_COUNTERS) {
-    snapshot[name] = counters.get(name) ?? 0;
-  }
-  return snapshot;
+  // Written out rather than folded into an asserted empty object. An assertion
+  // would claim a shape that is not yet true at the moment it is made; an
+  // explicit literal is checked by the compiler, so adding a counter to the
+  // union without adding it here is a build error rather than a silent zero.
+  const read = (name: Phase0Counter): number => counters.get(name) ?? 0;
+  return {
+    health_requests: read("health_requests"),
+    health_failures: read("health_failures"),
+    readiness_failures: read("readiness_failures"),
+    service_binding_requests: read("service_binding_requests"),
+    service_binding_failures: read("service_binding_failures"),
+    auth_failures: read("auth_failures"),
+    d1_errors: read("d1_errors"),
+    r2_errors: read("r2_errors"),
+    kv_errors: read("kv_errors"),
+    paid_calls_blocked: read("paid_calls_blocked"),
+    unexpected_external_calls: read("unexpected_external_calls"),
+  };
 }
 
 /** Test-only: reset counters between cases. */
