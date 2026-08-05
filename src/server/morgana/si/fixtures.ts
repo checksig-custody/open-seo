@@ -17,7 +17,7 @@
  *     calls are enabled. Fixture data must never be mistaken for measurement.
  */
 
-export interface FixtureOverview {
+interface FixtureOverview {
   organicTrafficEstimate: number | null;
   organicKeywordCount: number | null;
   backlinkCount: number | null;
@@ -25,7 +25,7 @@ export interface FixtureOverview {
   rankSignal: number | null;
 }
 
-export interface FixtureKeyword {
+interface FixtureKeyword {
   keyword: string;
   rankGroup: number;
   rankAbsolute: number;
@@ -37,7 +37,7 @@ export interface FixtureKeyword {
   rankingUrl: string;
 }
 
-export interface FixturePage {
+interface FixturePage {
   url: string;
   estimatedTraffic: number;
   keywordCount: number;

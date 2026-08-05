@@ -13,7 +13,7 @@ import { incrementCounter, log } from "./phase0-logging";
  * does not depend on upstream billing behaviour.
  */
 
-export type PaidCallDecision =
+type PaidCallDecision =
   | { allowed: true }
   | { allowed: false; reason: string };
 

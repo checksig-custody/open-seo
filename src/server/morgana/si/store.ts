@@ -48,7 +48,7 @@ export interface SearchEntityRow {
   disabledAt: string | null;
 }
 
-export interface CreateEntityInput {
+interface CreateEntityInput {
   displayName: string;
   domain: string;
   entityType: EntityType;
@@ -128,7 +128,7 @@ export async function createEntity(
   return row as SearchEntityRow;
 }
 
-export interface UpdateEntityInput {
+interface UpdateEntityInput {
   displayName?: string;
   priority?: Priority;
   includeSubdomains?: boolean;
@@ -170,7 +170,7 @@ export async function updateEntity(
 
 // --- snapshots --------------------------------------------------------------
 
-export interface SnapshotMetrics {
+interface SnapshotMetrics {
   organicTrafficEstimate: number | null;
   organicKeywordCount: number | null;
   backlinkCount: number | null;
@@ -178,7 +178,7 @@ export interface SnapshotMetrics {
   rankSignal: number | null;
 }
 
-export interface KeywordRow {
+interface KeywordRow {
   keyword: string;
   rankGroup: number | null;
   rankAbsolute: number | null;
@@ -191,7 +191,7 @@ export interface KeywordRow {
   serpUpdatedAt?: string | null;
 }
 
-export interface PageRow {
+interface PageRow {
   url: string;
   estimatedTraffic: number | null;
   keywordCount: number | null;
@@ -201,7 +201,7 @@ export interface PageRow {
   lastSeenAt?: string | null;
 }
 
-export interface PersistSnapshotInput {
+interface PersistSnapshotInput {
   entity: SearchEntityRow;
   snapshotDate: string;
   metrics: SnapshotMetrics;
@@ -213,7 +213,7 @@ export interface PersistSnapshotInput {
   actualCostMicros: number;
 }
 
-export interface PersistSnapshotResult {
+interface PersistSnapshotResult {
   snapshotId: string;
   created: boolean;
 }
@@ -382,14 +382,14 @@ export async function snapshotPages(snapshotId: string, limit = 100) {
 
 // --- refresh jobs -----------------------------------------------------------
 
-export type JobStatus =
+type JobStatus =
   | "pending"
   | "running"
   | "succeeded"
   | "failed"
   | "skipped";
 
-export function jobDedupeKey(
+function jobDedupeKey(
   entityId: string,
   snapshotDate: string,
   trigger: "scheduled" | "manual",
@@ -483,7 +483,7 @@ export async function recentJobs(limit = 50) {
 
 // --- usage ledger and budget state -----------------------------------------
 
-export interface RecordUsageInput {
+interface RecordUsageInput {
   day: string;
   entityId?: string | null;
   endpointPath: string;
@@ -546,7 +546,7 @@ export async function recordUsage(input: RecordUsageInput): Promise<void> {
     });
 }
 
-export interface LedgerTotals {
+interface LedgerTotals {
   requests: number;
   meteredRequests: number;
   paidSubmissions: number;
@@ -561,7 +561,7 @@ export interface LedgerTotals {
   blockedByBudget: number;
 }
 
-export const ZERO_TOTALS: LedgerTotals = {
+const ZERO_TOTALS: LedgerTotals = {
   requests: 0,
   meteredRequests: 0,
   paidSubmissions: 0,
@@ -614,7 +614,7 @@ export async function ledgerTotals(prefix: string): Promise<LedgerTotals> {
   return totals;
 }
 
-export interface BudgetStateRow {
+interface BudgetStateRow {
   month: string;
   monthlyCostMicros: number;
   currentDay: string | null;
@@ -644,79 +644,8 @@ export async function readBudgetState(month: string): Promise<BudgetStateRow> {
   );
 }
 
-export async function addSpend(
-  month: string,
-  day: string,
-  micros: number,
-): Promise<void> {
-  const state = await readBudgetState(month);
-  // A new day resets the daily counter rather than accumulating across days.
-  const dailyBase = state.currentDay === day ? state.dailyCostMicros : 0;
-  await db
-    .insert(searchBudgetState)
-    .values({
-      month,
-      monthlyCostMicros: micros,
-      currentDay: day,
-      dailyCostMicros: micros,
-      consecutiveFailures: 0,
-      circuitOpenedAt: null,
-      lastAlertThreshold: null,
-      updatedAt: nowIso(),
-    })
-    .onConflictDoUpdate({
-      target: searchBudgetState.month,
-      set: {
-        monthlyCostMicros: sql`${searchBudgetState.monthlyCostMicros} + ${micros}`,
-        currentDay: day,
-        dailyCostMicros: dailyBase + micros,
-        updatedAt: nowIso(),
-      },
-    });
-}
-
-export async function recordProviderFailure(
-  month: string,
-  threshold: number,
-): Promise<void> {
-  const state = await readBudgetState(month);
-  const failures = state.consecutiveFailures + 1;
-  await db
-    .insert(searchBudgetState)
-    .values({
-      month,
-      monthlyCostMicros: 0,
-      currentDay: null,
-      dailyCostMicros: 0,
-      consecutiveFailures: failures,
-      circuitOpenedAt: failures >= threshold ? nowIso() : null,
-      lastAlertThreshold: null,
-      updatedAt: nowIso(),
-    })
-    .onConflictDoUpdate({
-      target: searchBudgetState.month,
-      set: {
-        consecutiveFailures: failures,
-        circuitOpenedAt:
-          failures >= threshold ? nowIso() : state.circuitOpenedAt,
-        updatedAt: nowIso(),
-      },
-    });
-}
-
-export async function recordProviderSuccess(month: string): Promise<void> {
-  await db
-    .update(searchBudgetState)
-    .set({ consecutiveFailures: 0, circuitOpenedAt: null, updatedAt: nowIso() })
-    .where(eq(searchBudgetState.month, month));
-}
-
-export async function recordAlertThreshold(
-  month: string,
-  threshold: number,
-): Promise<void> {
-  await db
-    .update(searchBudgetState)
-    .set({ lastAlertThreshold: threshold, updatedAt: nowIso() })
-    .where(eq(searchBudgetState.month, month));
-}
+// NOTE: the budget WRITE path (accruing spend, tripping the breaker, recording an
+// announced alert threshold) is deliberately absent. Nothing can call it: live
+// collection is not implemented in phase 1, so there is no spend to accrue. It
+// belongs with the live collector, and shipping it now would be unreachable code
+// that knip is right to reject. The READ path above is used and tested.

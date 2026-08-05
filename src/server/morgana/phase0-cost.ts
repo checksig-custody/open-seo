@@ -20,13 +20,13 @@ import { detectMeteredWhileDisabled } from "./phase0-guard";
 export const SEARCH_INTELLIGENCE_COST_CENTRE = "dataforseo_search_intelligence";
 export const BRAND_MONITORING_COST_CENTRE = "dataforseo_brand_monitoring";
 
-export type DataForSeoStatus =
+type DataForSeoStatus =
   | "disabled"
   | "not_configured"
   | "configured_but_paid_calls_disabled"
   | "configured";
 
-export type CostLedger = {
+type CostLedger = {
   cost_centre: string;
   requests: number;
   metered_requests: number;
@@ -72,7 +72,7 @@ export function resolveDataForSeoStatus(
   return "configured";
 }
 
-export type UsageTotals = {
+type UsageTotals = {
   requests: number;
   meteredRequests: number;
   paidSubmissions: number;

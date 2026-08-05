@@ -31,8 +31,8 @@ import * as store from "./store";
  * property that the engine cannot spend unless Morgana asks it to.
  */
 
-export const TOP_KEYWORD_LIMIT = 100;
-export const TOP_PAGE_LIMIT = 100;
+const TOP_KEYWORD_LIMIT = 100;
+const TOP_PAGE_LIMIT = 100;
 
 export type ProviderStatus =
   | "not_configured"
@@ -64,7 +64,7 @@ function limitsFrom(config: Phase0Config) {
   };
 }
 
-export function credentialPresent(env: object): boolean {
+function credentialPresent(env: object): boolean {
   const value =
     (env as Record<string, unknown>).DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY ??
     (env as Record<string, unknown>).DATAFORSEO_API_KEY;
@@ -379,7 +379,7 @@ export async function domainOverview(
   };
 }
 
-export interface ComparisonRow {
+interface ComparisonRow {
   entity: store.SearchEntityRow;
   snapshotDate: string | null;
   organicTrafficEstimate: number | null;
@@ -394,7 +394,7 @@ export interface ComparisonRow {
   freshness: "fresh" | "stale" | "none";
 }
 
-export interface ComparisonResult {
+interface ComparisonResult {
   rows: ComparisonRow[];
   visibility: VisibilityShareOutcome;
 }
@@ -450,7 +450,7 @@ export async function compareDomains(
   };
 }
 
-export interface CostStatus {
+interface CostStatus {
   costCentre: string;
   providerStatus: ProviderStatus;
   paidCallsEnabled: boolean;
