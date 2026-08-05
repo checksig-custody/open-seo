@@ -255,6 +255,22 @@ export async function handlePhase0Request(
   env: object,
 ): Promise<Response | null> {
   const pathname = new URL(request.url).pathname;
+
+  // MORGANA LOCAL PATCH (UPSTREAM.md, patch P6). Phase-1 Search Intelligence
+  // shares this private surface: same "no public ingress, Service Binding only"
+  // reachability, same fail-closed posture. It is dispatched here rather than
+  // in `src/server.ts` so the engine has exactly one private entry point.
+  //
+  // The import is DYNAMIC on purpose. A static one would pull the Drizzle/D1
+  // layer — and therefore `cloudflare:workers` — into this module's eager
+  // graph, which both breaks the Node-side Phase-0 tests and would make
+  // `/healthz` load the database stack it is explicitly supposed not to touch.
+  if (pathname.startsWith("/internal/si/")) {
+    const { handleSearchIntelligenceRequest } = await import("./si/api");
+    const response = await handleSearchIntelligenceRequest(request, env);
+    if (response) return response;
+  }
+
   if (!PHASE0_PATHS.has(pathname)) {
     return null;
   }
