@@ -382,12 +382,7 @@ export async function snapshotPages(snapshotId: string, limit = 100) {
 
 // --- refresh jobs -----------------------------------------------------------
 
-type JobStatus =
-  | "pending"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "skipped";
+type JobStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
 
 function jobDedupeKey(
   entityId: string,
