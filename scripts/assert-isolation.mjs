@@ -12,6 +12,10 @@
  * Run before every `d1 migrations apply` and every `wrangler deploy`:
  *   node scripts/assert-isolation.mjs <path-to-wrangler-config>
  *
+ * Migration preflight — additionally assert the exact database the migrator
+ * will target, so a correct config cannot be paired with a wrong CLI argument:
+ *   node scripts/assert-isolation.mjs <config> --expect-d1 <database-name>
+ *
  * Exits non-zero on any violation. Read-only: it never calls Cloudflare.
  */
 import { readFileSync } from "node:fs";
@@ -81,6 +85,40 @@ function main() {
 
   const violations = [];
   const values = collectStrings(config);
+
+  // Migration preflight. The config can be correct while the CLI argument is
+  // wrong — `wrangler d1 migrations apply <name> -c <config>` takes the database
+  // from the ARGUMENT, and a config-only check would happily watch the migrator
+  // rewrite the wrong database. Assert the pair agrees.
+  const expectIndex = process.argv.indexOf("--expect-d1");
+  if (expectIndex !== -1) {
+    const expected = process.argv[expectIndex + 1];
+    const configured = config.d1_databases?.[0]?.database_name;
+    if (!expected) {
+      console.error("isolation guard: --expect-d1 requires a database name");
+      process.exit(2);
+    }
+    if (FORBIDDEN_NAMES.includes(expected.trim().toLowerCase())) {
+      violations.push(
+        `migration target "${expected}" is a Morgana production database — refusing`,
+      );
+    }
+    if (!expected.toLowerCase().includes(REQUIRED_STAGE_FRAGMENT)) {
+      violations.push(
+        `migration target "${expected}" does not contain "${REQUIRED_STAGE_FRAGMENT}" — phase 1 migrates staging only`,
+      );
+    }
+    if (configured !== expected) {
+      violations.push(
+        `migration target "${expected}" does not match the configured d1 database "${String(configured)}" — ambiguous binding, refusing`,
+      );
+    }
+    if (!config.d1_databases || config.d1_databases.length !== 1) {
+      violations.push(
+        `expected exactly one d1 binding, found ${String(config.d1_databases?.length ?? 0)} — ambiguous migration target`,
+      );
+    }
+  }
 
   for (const value of values) {
     const normalized = value.trim().toLowerCase();
