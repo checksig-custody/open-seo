@@ -139,8 +139,15 @@
     "DO_NOT_TRACK": "1",
     "VITE_SHOW_DEVTOOLS": "false",
 
-    // Phase-0 feature flags. Every capability off.
-    "SEARCH_INTELLIGENCE_ENABLED": "false",
+    // Phase-1 STAGING posture. The master flag is ON here so the private
+    // /internal/si/* surface answers and the integration can be verified end to
+    // end; Morgana's own production config keeps every flag false, and its env
+    // validation refuses to let these two be true in production.
+    //
+    // Turning this on cannot cause spending: paid calls stay off, both caps stay
+    // zero, and no DataForSEO credential exists, so the collector resolves to
+    // deterministic fixtures stamped source="fixture".
+    "SEARCH_INTELLIGENCE_ENABLED": "true",
     "SEARCH_INTELLIGENCE_STAGING_ENABLED": "true",
     "SEARCH_INTELLIGENCE_UI_ENABLED": "false",
     "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "false",
