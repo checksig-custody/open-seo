@@ -20,6 +20,30 @@ export function getEnvValueSync(
   env: object,
   name: string,
 ): string | undefined {
+  // MORGANA LOCAL PATCH (UPSTREAM.md, patch P3). Morgana Brand Monitoring and
+  // Morgana Search Intelligence must never share a DataForSEO credential or
+  // balance, so this deployment reads its own dedicated secret first. The
+  // upstream name remains the fallback, which keeps unpatched upstream
+  // behaviour intact and makes the patch a two-line addition rather than a
+  // rename across 20 call sites.
+  //
+  // A DataForSEO subaccount is just a different login:password pair, so
+  // switching to one is a secret change with no code change.
+  const aliased = MORGANA_ENV_ALIASES[name];
+  if (aliased) {
+    const aliasValue = readEnvValue(env, aliased);
+    if (aliasValue) {
+      return aliasValue;
+    }
+  }
+  return readEnvValue(env, name);
+}
+
+const MORGANA_ENV_ALIASES: Record<string, string | undefined> = {
+  DATAFORSEO_API_KEY: "DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY",
+};
+
+function readEnvValue(env: object, name: string): string | undefined {
   const processValue =
     typeof process !== "undefined" ? process.env?.[name] : undefined;
   if (processValue) {

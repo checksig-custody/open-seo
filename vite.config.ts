@@ -52,7 +52,15 @@ export default defineConfig(({ mode }) => {
             },
           })
         : null,
-      cloudflare({ inspectorPort: false, viteEnvironment: { name: "ssr" } }),
+      // MORGANA LOCAL PATCH (UPSTREAM.md, patch P1). The Cloudflare plugin reads
+      // the wrangler config at build time, so selecting the isolated staging
+      // config has to happen here rather than at deploy time. Unset in every
+      // other context, which leaves upstream behaviour byte-identical.
+      cloudflare({
+        configPath: env.WRANGLER_CONFIG_PATH || undefined,
+        inspectorPort: false,
+        viteEnvironment: { name: "ssr" },
+      }),
       tsConfigPaths(),
       tanstackStart(),
       viteReact(),

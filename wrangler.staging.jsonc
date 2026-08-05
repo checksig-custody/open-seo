@@ -1,0 +1,166 @@
+/**
+ * Morgana Search Intelligence Engine — STAGING.
+ *
+ * MORGANA LOCAL PATCH (see UPSTREAM.md, patch P1). Upstream deploys through
+ * Alchemy (`alchemy.run.ts`). This deployment deliberately does not: Alchemy is
+ * pinned to a prerelease (2.0.0-beta.61), keeps its own state store, is used
+ * elsewhere in the repo with `--adopt`, and auto-provisions Cloudflare Access.
+ * On a Cloudflare account that also holds Morgana production, an IaC tool that
+ * can adopt existing resources is the wrong risk to take for a staging engine.
+ * A hand-authored config is auditable line by line and provisions nothing.
+ *
+ * Build and deploy (see docs/search-intelligence/OPERATIONS.md in the Morgana
+ * repo):
+ *   node scripts/assert-isolation.mjs wrangler.staging.jsonc
+ *   WRANGLER_CONFIG_PATH=wrangler.staging.jsonc pnpm exec vite build
+ *   node scripts/assert-isolation.mjs dist/server/wrangler.json
+ *   wrangler deploy -c dist/server/wrangler.json
+ *
+ * The isolation guard runs twice on purpose: once on this file, and again on
+ * the config the build generates, because the deployed artifact is the one that
+ * actually matters.
+ *
+ * SECURITY POSTURE — read before changing anything here.
+ *
+ * This Worker has NO PUBLIC INGRESS. `workers_dev` and `preview_urls` are both
+ * false and no route is declared, so it is unreachable from the internet and
+ * callable only over Morgana's Service Binding. That is the compensating
+ * control for the absent Cloudflare Access application (creating one needs a
+ * Zero Trust API token that does not exist yet — see OPERATIONS.md). Enabling
+ * either ingress would publish an unauthenticated SEO application. Do not.
+ *
+ * `scripts/assert-isolation.mjs` enforces every invariant below and must pass
+ * before any migration or deploy.
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "morgana-search-intelligence-staging",
+  "main": "src/server.ts",
+  "compatibility_date": "2025-09-02",
+  // `global_fetch_strictly_public` is an upstream choice worth keeping: it
+  // blocks Worker fetches to private, loopback and link-local addresses, which
+  // is a real SSRF mitigation for the crawler paths that Phase 0 keeps off.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+
+  // No public ingress. See the security note above.
+  "workers_dev": false,
+  "preview_urls": false,
+
+  "observability": {
+    "enabled": true,
+    // Upstream enables traces. Spans bill as observability events, and Phase 0
+    // must generate no new spend of any kind, so traces stay off until there is
+    // a reason to pay for them.
+    "traces": {
+      "enabled": false,
+    },
+  },
+
+  // Upstream sets Smart Placement to move the fetch handler closer to external
+  // subrequests. Phase 0 makes no external subrequests, so it would buy nothing.
+
+  // NO CRON. Upstream ships `*/15 * * * *`, which runs scheduled rank checks —
+  // billable DataForSEO work. Phase 0 performs no scheduled SEO collection, so
+  // the trigger is removed entirely. `src/server.ts` additionally refuses a
+  // scheduled run while SEARCH_INTELLIGENCE_ENABLED is false, so the trigger
+  // and the handler are two independent controls on the same risk.
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "morgana-search-intelligence-staging",
+      "database_id": "0bce5159-d388-4d0e-8213-aa96803d37f9",
+      "migrations_dir": "drizzle",
+    },
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "7992931f3abe4eebb156d7602d9ecd6b",
+    },
+    {
+      "binding": "OAUTH_KV",
+      "id": "9a7b560aff694789a66d261c891988ee",
+    },
+  ],
+
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "morgana-search-intelligence-staging",
+    },
+  ],
+
+  // Durable Objects and Workflows are declared because the Worker's module
+  // exports them — omitting a declared class breaks the upload. They are
+  // unreachable in Phase 0: the agent routes sit behind an auth check that
+  // fails closed, and no workflow is ever started.
+  "durable_objects": {
+    "bindings": [
+      { "name": "ONBOARDING_CHAT", "class_name": "OnboardingChatAgent" },
+      { "name": "SAM_CHAT", "class_name": "SamChatAgent" },
+    ],
+  },
+  // SQLite-backed DO classes must keep their upstream migration tags. Dropping
+  // or renumbering these orphans the DO storage.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["OnboardingChatAgent"] },
+    { "tag": "v2", "new_sqlite_classes": ["SamChatAgent"] },
+  ],
+  "workflows": [
+    {
+      "name": "site-audit-workflow-si-staging",
+      "binding": "SITE_AUDIT_WORKFLOW",
+      "class_name": "SiteAuditWorkflow",
+    },
+    {
+      "name": "rank-check-workflow-si-staging",
+      "binding": "RANK_CHECK_WORKFLOW",
+      "class_name": "RankCheckWorkflow",
+    },
+  ],
+
+  "vars": {
+    // Fail closed. `cloudflare_access` with TEAM_DOMAIN and POLICY_AUD both
+    // UNSET means every application route rejects, because there is no issuer
+    // or audience to verify a JWT against. That is deliberate for Phase 0: the
+    // SEO application must not be usable. It is the second layer under "no
+    // public ingress", not a substitute for it.
+    //
+    // `local_noauth` must never be set here — it injects an admin user.
+    "AUTH_MODE": "cloudflare_access",
+    "DATABASE_PROVIDER": "d1",
+
+    // Upstream self-host telemetry is ON by default and posts an install
+    // heartbeat to a hardcoded PostHog project. Both opt-outs are set; any
+    // value other than 0/false/no/off disables it.
+    "OPENSEO_TELEMETRY_DISABLED": "1",
+    "DO_NOT_TRACK": "1",
+    "VITE_SHOW_DEVTOOLS": "false",
+
+    // Phase-0 feature flags. Every capability off.
+    "SEARCH_INTELLIGENCE_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_STAGING_ENABLED": "true",
+    "SEARCH_INTELLIGENCE_UI_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_MCP_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_AI_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED": "false",
+
+    // Hard-zero spend. `src/server/morgana/phase0-env.ts` refuses to boot if
+    // paid calls are ever enabled while either cap is zero, so flipping one
+    // flag can never by itself authorise spending.
+    "SEO_DATAFORSEO_DAILY_COST_CAP_USD": "0",
+    "SEO_DATAFORSEO_MONTHLY_COST_CAP_USD": "0",
+
+    "SEARCH_INTELLIGENCE_ENVIRONMENT": "staging",
+    "SEARCH_INTELLIGENCE_API_VERSION": "2026-08-05",
+
+    // Provenance, surfaced by /internal/status so the deployed artifact can be
+    // tied to an upstream release without trusting a build log.
+    "ENGINE_UPSTREAM_REPOSITORY": "https://github.com/every-app/open-seo",
+    "ENGINE_UPSTREAM_RELEASE": "v0.1.3",
+    "ENGINE_UPSTREAM_COMMIT": "9d19e439905a9a954ccdefe22d9270d7c389695d",
+  },
+}
