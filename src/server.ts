@@ -23,6 +23,9 @@ import {
   handleAutumnWebhookRequest,
 } from "@/server/billing/autumn-webhook";
 import { maybeSendSelfHostHeartbeat } from "@/server/lib/self-host-telemetry";
+// MORGANA LOCAL PATCH (UPSTREAM.md, patch P2/P4).
+import { handlePhase0Request } from "@/server/morgana/phase0-routes";
+import { readPhase0Config, isEnabled } from "@/server/morgana/phase0-env";
 
 const appFetch = createStartHandler(defaultStreamHandler);
 const openSeoOAuthProvider = createOpenSeoOAuthProvider(appFetch);
@@ -133,11 +136,21 @@ function fetch(
   return withPgClient(() => Promise.resolve(handleFetch(request, env, ctx)));
 }
 
-function handleFetch(
+async function handleFetch(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
-): Response | Promise<Response> {
+): Promise<Response> {
+  // MORGANA LOCAL PATCH (UPSTREAM.md, patch P2). The Phase-0 contract endpoints
+  // are answered before anything else — including the telemetry heartbeat below
+  // — so a health probe does no work beyond what it reports on and cannot
+  // trigger an outbound call. Returns null for every other path, leaving
+  // upstream routing untouched.
+  const phase0 = await handlePhase0Request(request, env);
+  if (phase0) {
+    return phase0;
+  }
+
   ctx.waitUntil(maybeSendSelfHostHeartbeat());
 
   const authMode = getAuthMode(env.AUTH_MODE);
@@ -164,6 +177,13 @@ function handleFetch(
     (authMode === "cloudflare_access" || authMode === "local_noauth") &&
     pathname === MCP_ROUTE
   ) {
+    // MORGANA LOCAL PATCH (UPSTREAM.md, patch P4). MCP is reachable in
+    // cloudflare_access mode, not just hosted mode, so "we published no route"
+    // is not on its own a control — a Service Binding call would still reach
+    // it. Phase 0 requires MCP off, so it is refused explicitly and by default.
+    if (!isEnabled(readPhase0Config(env).SEARCH_INTELLIGENCE_MCP_ENABLED)) {
+      return new Response("Not found", { status: 404 });
+    }
     return handleSelfHostedOpenSeoMcpRequest(publicRequest, authMode, env, ctx);
   }
 
@@ -185,6 +205,23 @@ export default {
     env: Env,
     _ctx: ExecutionContext,
   ) {
+    // MORGANA LOCAL PATCH (UPSTREAM.md, patch P4). The staging deployment ships
+    // no cron trigger at all, so this handler should never fire. If it is ever
+    // invoked anyway — a re-added trigger, a manual `wrangler cron` — scheduled
+    // SEO collection is still refused. The trigger and this check are two
+    // independent controls on the same risk.
+    if (!isEnabled(readPhase0Config(env).SEARCH_INTELLIGENCE_ENABLED)) {
+      console.log(
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: "warn",
+          service: "morgana-search-intelligence",
+          event: "scheduled_run_refused",
+          error_code: "SEARCH_INTELLIGENCE_DISABLED",
+        }),
+      );
+      return;
+    }
     // Scope a per-request Postgres client for the cron run (no-op in D1 mode).
     await withPgClient(() => runScheduledRankChecks(env));
   },
