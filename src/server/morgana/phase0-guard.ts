@@ -13,9 +13,7 @@ import { incrementCounter, log } from "./phase0-logging";
  * does not depend on upstream billing behaviour.
  */
 
-type PaidCallDecision =
-  | { allowed: true }
-  | { allowed: false; reason: string };
+type PaidCallDecision = { allowed: true } | { allowed: false; reason: string };
 
 export const PAID_CALLS_DISABLED_REASON =
   "search intelligence paid calls are disabled (phase 0)";
