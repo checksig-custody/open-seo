@@ -51,6 +51,20 @@ beforeEach(() => {
   vi.unstubAllEnvs();
 });
 
+/**
+ * Parse a JSON body without asserting its shape. The engine returns unknown by
+ * contract, so the tests read it through an index rather than claiming a type
+ * the response has not been checked against.
+ */
+async function readBody(
+  response: Response | null | undefined,
+): Promise<Record<string, unknown>> {
+  const body: unknown = await response?.json();
+  return typeof body === "object" && body !== null && !Array.isArray(body)
+    ? Object.fromEntries(Object.entries(body))
+    : {};
+}
+
 describe("phase 0 configuration", () => {
   it("defaults every capability to off", () => {
     const config = phase0EnvSchema.parse({});
@@ -295,7 +309,7 @@ describe("contract endpoints", () => {
   const env = { ...PHASE0_VARS };
 
   it("serves exactly three paths and nothing else", () => {
-    expect([...PHASE0_PATHS].sort()).toEqual([
+    expect(Array.from(PHASE0_PATHS).toSorted()).toEqual([
       "/healthz",
       "/internal/status",
       "/readyz",
@@ -328,7 +342,7 @@ describe("contract endpoints", () => {
       new Request("https://engine.internal/internal/status"),
       { ...env, ENGINE_UPSTREAM_RELEASE: "v0.1.3" },
     );
-    const body = (await response?.json()) as Record<string, unknown>;
+    const body = await readBody(response);
     expect(body.paid_calls_enabled).toBe(false);
     expect(body.mcp_enabled).toBe(false);
     expect(body.ai_enabled).toBe(false);
@@ -372,7 +386,7 @@ describe("contract endpoints", () => {
       { ...env, SEO_DATAFORSEO_DAILY_COST_CAP_USD: "not-a-number" },
     );
     expect(response?.status).toBe(500);
-    const body = (await response?.json()) as Record<string, unknown>;
+    const body = await readBody(response);
     expect(body.error).toBe("invalid engine configuration");
     // The failing variable name must not leak to the caller.
     expect(JSON.stringify(body)).not.toContain("SEO_DATAFORSEO");
@@ -392,7 +406,11 @@ describe("contract endpoints", () => {
     // Bindings are absent here too, but the point is that a spendable engine
     // is never reported ready.
     expect(response?.status).toBe(503);
-    const body = (await response?.json()) as { checks: Record<string, string> };
-    expect(body.checks.spend_posture).toBe("degraded");
+    const body = await readBody(response);
+    const checks = body.checks;
+    expect(typeof checks === "object" && checks !== null).toBe(true);
+    expect(Object.fromEntries(Object.entries(checks ?? {})).spend_posture).toBe(
+      "degraded",
+    );
   });
 });
