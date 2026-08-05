@@ -8,9 +8,9 @@
  * is ever emitted: this module redacts rather than trusting call sites.
  */
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
+type LogLevel = "debug" | "info" | "warn" | "error";
 
-export const PHASE0_COUNTERS = [
+const PHASE0_COUNTERS = [
   "health_requests",
   "health_failures",
   "readiness_failures",
@@ -24,7 +24,7 @@ export const PHASE0_COUNTERS = [
   "unexpected_external_calls",
 ] as const;
 
-export type Phase0Counter = (typeof PHASE0_COUNTERS)[number];
+type Phase0Counter = (typeof PHASE0_COUNTERS)[number];
 
 /**
  * Counters are per-isolate and best-effort: they exist so a smoke test and a
@@ -94,7 +94,7 @@ export function redactHeaders(headers: Headers): Record<string, string> {
   return safe;
 }
 
-export type Phase0LogFields = {
+type Phase0LogFields = {
   event: string;
   request_id: string;
   trace_id?: string;

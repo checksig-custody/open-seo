@@ -32,7 +32,7 @@ export const PHASE0_PATHS = new Set([
   "/internal/status",
 ]);
 
-export const STAGING_MARKER = "Morgana Search Intelligence — STAGING";
+const STAGING_MARKER = "Morgana Search Intelligence — STAGING";
 const SERVICE_NAME = "morgana-search-intelligence";
 
 /** Show enough of an id to correlate, never enough to identify a resource. */

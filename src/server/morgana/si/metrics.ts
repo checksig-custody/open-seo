@@ -9,7 +9,7 @@
  * table that is confidently wrong — which is worse than an empty one.
  */
 
-export type DeltaStatus = "ok" | "insufficient_history" | "not_available";
+type DeltaStatus = "ok" | "insufficient_history" | "not_available";
 
 export interface Delta {
   status: DeltaStatus;
@@ -150,7 +150,7 @@ export function computeDeltas(
 
 export type VisibilityShareStatus = "ok" | "insufficient_data";
 
-export interface VisibilityShareInput {
+interface VisibilityShareInput {
   entityId: string;
   organicTrafficEstimate: number | null;
   locationCode: number;

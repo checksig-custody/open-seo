@@ -11,7 +11,7 @@
  * revoking this one cannot slow brand collection down by a single request.
  */
 
-export const MICROS_PER_USD = 1_000_000;
+const MICROS_PER_USD = 1_000_000;
 
 /**
  * How a call is counted. The distinction exists because Brand Monitoring was
@@ -44,14 +44,14 @@ export function isProviderCall(meteringClass: MeteringClass): boolean {
   return meteringClass !== "cache";
 }
 
-export interface BudgetLimits {
+interface BudgetLimits {
   dailyCapMicros: number;
   monthlyCapMicros: number;
   paidCallsEnabled: boolean;
   circuitBreakerThreshold: number;
 }
 
-export interface BudgetUsage {
+interface BudgetUsage {
   dailyCostMicros: number;
   monthlyCostMicros: number;
   consecutiveFailures: number;
@@ -65,7 +65,7 @@ export type BudgetLevel =
   | "stopping"
   | "exhausted";
 
-export interface BudgetDecision {
+interface BudgetDecision {
   allowed: boolean;
   level: BudgetLevel;
   /** Machine-readable block reason; absent when allowed. */
@@ -75,9 +75,9 @@ export interface BudgetDecision {
 }
 
 /** §25 thresholds. */
-export const WARNING_PERCENT = 70;
-export const DEGRADED_PERCENT = 85;
-export const STOP_PERCENT = 95;
+const WARNING_PERCENT = 70;
+const DEGRADED_PERCENT = 85;
+const STOP_PERCENT = 95;
 
 export function levelFor(percent: number): BudgetLevel {
   if (percent >= 100) return "exhausted";

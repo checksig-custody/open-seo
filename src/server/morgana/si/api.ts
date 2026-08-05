@@ -19,8 +19,8 @@ import * as store from "./store";
  * and detect a version mismatch rather than mis-parsing a changed payload.
  */
 
-export const SI_API_VERSION = "2026-08-06";
-export const SI_PATH_PREFIX = "/internal/si/";
+const SI_API_VERSION = "2026-08-06";
+const SI_PATH_PREFIX = "/internal/si/";
 
 interface EnvelopeMeta {
   cacheStatus?: "hit" | "miss" | "not_applicable";

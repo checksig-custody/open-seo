@@ -28,7 +28,7 @@ export class DomainValidationError extends Error {
   }
 }
 
-export interface NormalizedDomain {
+interface NormalizedDomain {
   /** What the operator typed, trimmed. Shown in the UI. */
   display: string;
   /** Lowercased, ASCII/punycode, no protocol, no www, no path. The match key. */
