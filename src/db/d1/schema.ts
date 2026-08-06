@@ -13,3 +13,4 @@ export * from "../telemetry.schema";
 export * from "../search-intelligence.schema";
 export * from "../search-intelligence-p2.schema";
 export * from "../search-intelligence-p3.schema";
+export * from "../search-intelligence-p4.schema";
