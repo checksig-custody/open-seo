@@ -40,17 +40,24 @@ const BACKLINKS_DOMAINS_ENDPOINT = "v3/backlinks/referring_domains/live";
 /**
  * The most one collection could plausibly cost, in micro-USD.
  *
- * Backlinks is priced per request plus per returned row, so the ceiling is a
- * function of the limits this collector asks for — which are deliberately small
- * (see `DEFAULT_SAMPLE_LIMIT`). The figure is several times DataForSEO's list
- * price for three such requests, because the pre-flight must assume the worst
- * case and the provider states its charge only in the response.
+ * MEASURED, NOT MODELLED. The first live collection of checksig.com — summary
+ * plus 100 referring domains plus 100 backlink rows — cost **79 236 µUSD**. The
+ * previous figure here was 25 000, reasoned as "several times the list price of
+ * three requests", and it was wrong by 3.2x because Backlinks charges per
+ * RETURNED ROW on top of a per-request base. Rows are where the money is, and a
+ * ceiling that ignores them is not a ceiling.
  *
- * NOT copied from the SERP worst case: a rank submission and a backlink profile
- * are priced on different models, and reusing that number would have been a
- * guess wearing a constant's clothes.
+ * 100 000 µUSD is the observed cost plus roughly a quarter, for a domain whose
+ * sampled rows may be priced higher than CheckSig's. It is deliberately equal
+ * to the ceiling authorised for the competitor verification, so a collection
+ * that would exceed the plan is denied by the guard rather than discovered in a
+ * ledger afterwards.
+ *
+ * IT SCALES WITH `DEFAULT_SAMPLE_LIMIT`. Raising the sample without raising
+ * this is how the 2026-08-06 overrun happened; the two numbers move together or
+ * not at all.
  */
-export const WORST_CASE_BACKLINK_MICROS = 25_000;
+export const WORST_CASE_BACKLINK_MICROS = 100_000;
 
 /** Rows sampled per list call. Small on purpose: cost scales with rows. */
 export const DEFAULT_SAMPLE_LIMIT = 100;

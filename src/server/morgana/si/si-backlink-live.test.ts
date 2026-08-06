@@ -375,3 +375,28 @@ describe("the provider adapter", () => {
     expect(result.datasetCoverage).toBeNull();
   });
 });
+
+describe("the cost ceiling", () => {
+  it("is at least what a collection was actually observed to cost", async () => {
+    const { WORST_CASE_BACKLINK_MICROS } =
+      await import("./backlink-live-collector");
+    // The first live collection of checksig.com cost 79 236 µUSD against a
+    // 25 000 µUSD ceiling, because Backlinks charges per returned row on top of
+    // a per-request base. A ceiling below the only measurement we have is not a
+    // ceiling, and this test is what stops it drifting back down.
+    expect(WORST_CASE_BACKLINK_MICROS).toBeGreaterThanOrEqual(79_236);
+    // And it must stay inside the authorised verification budget, so the guard
+    // denies rather than the plan being quietly exceeded.
+    expect(WORST_CASE_BACKLINK_MICROS).toBeLessThanOrEqual(100_000);
+  });
+
+  it("moves with the sample limit, since cost scales with rows", async () => {
+    const { WORST_CASE_BACKLINK_MICROS, DEFAULT_SAMPLE_LIMIT } =
+      await import("./backlink-live-collector");
+    // 100 rows per list bought 79 236 µUSD. Anyone raising the sample without
+    // raising the ceiling reintroduces the 2026-08-06 overrun exactly.
+    const observedPerRowBudget =
+      WORST_CASE_BACKLINK_MICROS / DEFAULT_SAMPLE_LIMIT;
+    expect(observedPerRowBudget).toBeGreaterThanOrEqual(792);
+  });
+});
