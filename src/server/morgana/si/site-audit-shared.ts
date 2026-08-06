@@ -25,8 +25,15 @@ const INITIAL_ACTIVATION_PAGE_LIMIT = 100;
 export const CRAWL_DEADLINE_MS = 20 * 60 * 1000;
 /** Pages per invocation. Two at a time, so a batch is a handful of round trips. */
 export const BATCH_PAGES = 10;
-/** A courtesy to the site being crawled, not a throughput knob. */
-export const CONCURRENCY = 2;
+/**
+ * A courtesy to the site being crawled, not a throughput knob.
+ *
+ * One at a time. The crawler's only current target is our own site and the
+ * batch is already small, so there is nothing to buy by doubling this — and a
+ * serial crawl is the version whose load on someone else's server is trivially
+ * predictable.
+ */
+export const CONCURRENCY = 1;
 export const MANUAL_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 export interface RunOutcome {
