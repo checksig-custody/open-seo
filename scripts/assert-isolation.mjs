@@ -18,28 +18,44 @@
  *
  * Exits non-zero on any violation. Read-only: it never calls Cloudflare.
  */
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import process from "node:process";
 
 /**
- * Morgana production resources. Matching any of these — by name or by id, in
- * any binding — is a hard failure. Names are matched case-insensitively and as
- * whole values, so `morgana-search-intelligence-staging` does not collide with
- * `morgana-brand-monitor`.
+ * Morgana production resources, stored as truncated SHA-256 digests.
+ *
+ * This fork is PUBLIC. Publishing the literal resource names and the production
+ * D1 UUID would put internal infrastructure identifiers in a public repository
+ * for no benefit — the guard only ever needs to answer "is this value one of
+ * the forbidden ones", and a hash answers that exactly as well. The private
+ * Morgana repository documents which resources these correspond to.
+ *
+ * Matching is case-insensitive and on the whole value, so
+ * `morgana-search-intelligence-staging` cannot collide with a hashed entry.
  */
-const FORBIDDEN_NAMES = [
-  "morgana-brand-monitor",
-  "morgana-brand-assets",
-  "morgana-mentions",
-  "morgana-discovery",
-  "morgana-discovery-dlq",
-  "checksig-feeds",
-  "social_mentions",
-  "morgana_intel",
-  "checksig-intel",
-];
+const FORBIDDEN_NAME_HASHES = new Set([
+  "85a473b68a354596",
+  "cf28d344850bcec7",
+  "dea4457437b832e0",
+  "2521ed066e97ea17",
+  "150b52648b9d542e",
+  "181a0a49ca35123a",
+  "de4bb646acf32ab2",
+  "0e33950f7fd4025f",
+  "09f13b870af0efd4",
+]);
 
-const FORBIDDEN_IDS = ["e98c476d-6df2-4a9e-932b-473ebea891ba"];
+const FORBIDDEN_ID_HASHES = new Set(["96e3a45820af4479"]);
+
+const digest = (value) =>
+  createHash("sha256")
+    .update(value.trim().toLowerCase())
+    .digest("hex")
+    .slice(0, 16);
+
+const isForbiddenName = (value) => FORBIDDEN_NAME_HASHES.has(digest(value));
+const isForbiddenId = (value) => FORBIDDEN_ID_HASHES.has(digest(value));
 
 /** Every resource name must say what it is and that it is not production. */
 const REQUIRED_NAME_FRAGMENT = "search-intelligence";
@@ -98,7 +114,7 @@ function main() {
       console.error("isolation guard: --expect-d1 requires a database name");
       process.exit(2);
     }
-    if (FORBIDDEN_NAMES.includes(expected.trim().toLowerCase())) {
+    if (isForbiddenName(expected)) {
       violations.push(
         `migration target "${expected}" is a Morgana production database — refusing`,
       );
@@ -122,17 +138,15 @@ function main() {
 
   for (const value of values) {
     const normalized = value.trim().toLowerCase();
-    if (FORBIDDEN_NAMES.includes(normalized)) {
+    if (isForbiddenName(normalized)) {
       violations.push(
-        `references Morgana production resource "${value}" — Search Intelligence must never share a Morgana resource`,
+        `"${value}" is a Morgana production resource — Search Intelligence must never share one`,
       );
     }
-    for (const id of FORBIDDEN_IDS) {
-      if (normalized.includes(id)) {
-        violations.push(
-          `references Morgana production resource id ${id.slice(0, 8)}… — refusing`,
-        );
-      }
+    if (isForbiddenId(normalized)) {
+      violations.push(
+        `"${value.slice(0, 8)}…" is a Morgana production resource id — refusing`,
+      );
     }
   }
 

@@ -275,7 +275,7 @@ describe("log redaction", () => {
   });
 
   it("redacts an email address", () => {
-    expect(redact("user mattia@checksig.com denied")).toBe(
+    expect(redact("user person@example.com denied")).toBe(
       "user [redacted-email] denied",
     );
   });
