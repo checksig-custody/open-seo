@@ -2,6 +2,10 @@ import { envelope, json, num, readJson } from "./http";
 import * as keywordVolumes from "./keyword-volume-service";
 import * as p2service from "./p2-service";
 import { expireStaleReservations, globalSpend } from "./budget-authority";
+import * as p2Store from "./p2-store";
+import { capabilityMatrix, evaluateReleaseGate } from "./rollout-readiness";
+import { dryRunSchedule, proposedPolicy } from "./scheduler-dry-run";
+import { readinessFacts } from "./readiness-facts";
 import * as keywordVolumeStore from "./keyword-volume-store";
 import type { SiRequestContext } from "./router";
 
@@ -69,6 +73,65 @@ export async function dispatchKeywordVolume(
     const reconciled = await expireStaleReservations();
     const spend = await globalSpend(config);
     return json(envelope(config, { ...spend, reconciled }, { providerStatus }));
+  }
+
+  // Release readiness: what is built, what a provider has actually served, what
+  // has enough data to say anything, and what a human still has to decide.
+  // Read-only and free — it creates no job, takes no reservation and calls no
+  // provider, which is what makes it safe to ask at any time.
+  if (route === "readiness" && method === "GET") {
+    const spend = await globalSpend(config);
+    const trackedKeywords = await p2Store.listTrackedKeywords();
+    const facts = await readinessFacts(config, spend, trackedKeywords.length);
+    const matrix = capabilityMatrix(config, facts);
+    const gate = evaluateReleaseGate(matrix, facts);
+    const policy = proposedPolicy({
+      criticalKeywords: trackedKeywords.filter((k) => k.priority === "critical")
+        .length,
+      highKeywords: trackedKeywords.filter((k) => k.priority === "high").length,
+      entities: facts.domainOverviewSnapshots,
+    });
+    const forecast = dryRunSchedule(
+      {
+        criticalKeywords: 0,
+        highKeywords: 0,
+        entities: 0,
+        policy,
+      },
+      {
+        dailyMicros: spend.dailyCapMicros,
+        monthlyMicros: spend.monthlyCapMicros,
+      },
+    );
+    return json(
+      envelope(
+        config,
+        {
+          capabilities: matrix,
+          gate,
+          // The proposed cadence, priced, with every entry still disabled.
+          scheduler_dry_run: forecast,
+          budget: {
+            daily_actual_micros: spend.dailyActualMicros,
+            monthly_actual_micros: spend.monthlyActualMicros,
+            open_reservations_micros: spend.openReservationsMicros,
+            daily_cap_micros: spend.dailyCapMicros,
+            over_daily_cap: spend.overDailyCap,
+            per_collector: spend.perCollector,
+            reconciliation_pending: spend.reconciliationPending,
+            unexpected_spend_detected: spend.unexpectedSpendDetected,
+          },
+          // Logical channel and state only — never a URL, valid or not.
+          webhooks: facts.webhooksInvalid.map((channel) => ({
+            channel,
+            configured: false,
+            state: "webhook_invalid_configuration",
+            delivery: "suppressed",
+          })),
+        },
+        { providerStatus },
+      ),
+    );
   }
 
   // What was measured, when, and whether the provider actually answered.
