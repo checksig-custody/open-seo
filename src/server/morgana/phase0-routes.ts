@@ -189,9 +189,31 @@ async function handleReadyz(
   const paidCallsOff = !isEnabled(
     config.SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED,
   );
-  const capsAreZero =
-    config.SEO_DATAFORSEO_DAILY_COST_CAP_USD === 0 &&
-    config.SEO_DATAFORSEO_MONTHLY_COST_CAP_USD === 0;
+  /**
+   * Is spending bounded?
+   *
+   * This used to ask whether spending was IMPOSSIBLE — paid calls off AND both
+   * caps zero — and it blocked readiness. That was correct while the engine had
+   * no budget and no credential: a staging engine that could spend was not
+   * ready, however healthy its bindings were.
+   *
+   * It is wrong the moment production has a real budget, because it makes
+   * "configured to spend within a cap" indistinguishable from "misconfigured",
+   * and would report a correctly funded engine as `not_ready` with a 503.
+   *
+   * The invariant that actually matters is bounded, not zero:
+   *   - paid calls off  → nothing can spend, whatever the caps say;
+   *   - paid calls on   → both caps must be above zero, and the monthly cap must
+   *                       not be below the daily one, which is the incoherent
+   *                       pair a typo produces.
+   *
+   * Env validation already refuses paid calls with a zero cap at boot, so this
+   * is the second of two independent controls on the same risk, not the only
+   * one.
+   */
+  const daily = config.SEO_DATAFORSEO_DAILY_COST_CAP_USD;
+  const monthly = config.SEO_DATAFORSEO_MONTHLY_COST_CAP_USD;
+  const spendIsBounded = paidCallsOff || (daily > 0 && monthly >= daily);
 
   const checks = {
     database,
@@ -202,9 +224,9 @@ async function handleReadyz(
     // AUTH_MODE=cloudflare_access and no TEAM_DOMAIN/POLICY_AUD, which makes
     // every application route reject — the intended posture, not a fault.
     auth: getEnvValueSync(env, "AUTH_MODE") ? "ok" : "degraded",
-    // The spend posture is part of readiness: a staging engine that could spend
-    // is not ready, however healthy its bindings are.
-    spend_posture: paidCallsOff && capsAreZero ? "ok" : "degraded",
+    // Still part of readiness: an engine whose spending is not bounded is not
+    // ready, however healthy its bindings are.
+    spend_posture: spendIsBounded ? "ok" : "degraded",
     dataforseo,
   } as const;
 
