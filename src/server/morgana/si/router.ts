@@ -8,6 +8,7 @@ import {
   projectKeyword,
   projectPage,
 } from "./projections";
+import { dispatchPhase2 } from "./p2-router";
 import {
   badRequest,
   envelope,
@@ -35,7 +36,7 @@ import {
  * below needs the same five things, and adding a sixth later should not ripple
  * through every signature.
  */
-interface SiRequestContext {
+export interface SiRequestContext {
   route: string;
   request: Request;
   url: URL;
@@ -366,6 +367,7 @@ export async function dispatch(ctx: SiRequestContext): Promise<Response> {
   return (
     (await dispatchReads(ctx)) ??
     (await dispatchOperations(ctx)) ??
+    (await dispatchPhase2(ctx)) ??
     json({ error: "not found" }, 404)
   );
 }

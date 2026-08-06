@@ -13,6 +13,7 @@ import * as sqliteReddit from "./reddit-attribution.schema";
 import * as sqliteTelemetry from "./telemetry.schema";
 // MORGANA LOCAL PATCH (UPSTREAM.md, patch P6).
 import * as sqliteSearchIntelligence from "./search-intelligence.schema";
+import * as sqliteSearchIntelligenceP2 from "./search-intelligence-p2.schema";
 import * as pgApp from "./pg/app.schema";
 import * as pgSam from "./pg/sam.schema";
 import * as pgAuth from "./pg/better-auth-schema";
@@ -21,6 +22,7 @@ import * as pgGsc from "./pg/gsc.schema";
 import * as pgReddit from "./pg/reddit-attribution.schema";
 import * as pgTelemetry from "./pg/telemetry.schema";
 import * as pgSearchIntelligence from "./pg/search-intelligence.schema";
+import * as pgSearchIntelligenceP2 from "./pg/search-intelligence-p2.schema";
 
 // Guards the ONE structural artifact `db:generate` does not regenerate: the
 // hand-written Postgres schema. The provider-aware `db`/`@/db/schema` barrel
@@ -144,6 +146,7 @@ const sqliteAppTables = tablesFrom(
   sqliteReddit,
   sqliteTelemetry,
   sqliteSearchIntelligence,
+  sqliteSearchIntelligenceP2,
 );
 const pgAppTables = tablesFrom(
   pgApp,
@@ -153,6 +156,7 @@ const pgAppTables = tablesFrom(
   pgReddit,
   pgTelemetry,
   pgSearchIntelligence,
+  pgSearchIntelligenceP2,
 );
 const sqliteAuthTables = tablesFrom(sqliteAuth);
 const pgAuthTables = tablesFrom(pgAuth);
