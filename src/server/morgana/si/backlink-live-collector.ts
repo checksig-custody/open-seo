@@ -6,10 +6,7 @@ import {
   type CollectionAccounting,
 } from "./collection-accounting";
 import { classifyBacklinkError, type TypedFailure } from "./backlink-errors";
-import {
-  normalizeBacklinkDomain,
-  normalizeBacklinkUrl,
-} from "./backlink-normalize";
+import { normalizeBacklinkDomain } from "./backlink-normalize";
 
 /**
  * Morgana Search Intelligence — the live backlink collector.
@@ -36,9 +33,9 @@ import {
  * does not state stays null, and only a stated zero is a zero.
  */
 
-export const BACKLINKS_SUMMARY_ENDPOINT = "v3/backlinks/summary/live";
-export const BACKLINKS_ROWS_ENDPOINT = "v3/backlinks/backlinks/live";
-export const BACKLINKS_DOMAINS_ENDPOINT = "v3/backlinks/referring_domains/live";
+const BACKLINKS_SUMMARY_ENDPOINT = "v3/backlinks/summary/live";
+const BACKLINKS_ROWS_ENDPOINT = "v3/backlinks/backlinks/live";
+const BACKLINKS_DOMAINS_ENDPOINT = "v3/backlinks/referring_domains/live";
 
 /**
  * The most one collection could plausibly cost, in micro-USD.
@@ -444,8 +441,3 @@ export async function collectLiveBacklinks(input: {
     };
   }
 }
-
-/** Exported for the tests: the row shapes are the contract of this module. */
-export const __test = { toProfile, toBacklink, toReferringDomain, followSplit };
-
-export { normalizeBacklinkUrl };

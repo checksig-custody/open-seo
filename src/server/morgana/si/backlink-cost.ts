@@ -4,6 +4,7 @@ import { siBacklinkUsageLedger } from "@/db/schema";
 import { newId, nowIso } from "./ids";
 import type { Phase0Config } from "../phase0-env";
 import { resolveProviderStatus } from "./service";
+import { WORST_CASE_BACKLINK_MICROS } from "./backlink-live-collector";
 
 /**
  * Morgana Search Intelligence — phase 3 usage ledger and cost status.
@@ -253,6 +254,28 @@ export async function backlinkBudgetAllows(
   }
   if (daily.actualCostMicros / MICROS >= dailyCap) {
     return { allowed: false, reason: "daily cost cap reached" };
+  }
+  // HEADROOM, NOT JUST "NOT YET AT THE CAP". A collection that starts with
+  // 0.001 USD of room left will still spend what it spends: the provider states
+  // its charge only in the response. So the question asked here is whether the
+  // WORST case still fits — the same rule the SERP and keyword-volume
+  // pre-flights apply, with this subsystem's own ceiling rather than a number
+  // copied from a differently priced endpoint.
+  const worstCaseUsd = WORST_CASE_BACKLINK_MICROS / MICROS;
+  if (daily.actualCostMicros / MICROS + worstCaseUsd > dailyCap) {
+    return {
+      allowed: false,
+      reason: "the worst case of this collection would exceed the daily cap",
+    };
+  }
+  if (
+    monthly.actualCostMicros / MICROS + worstCaseUsd >
+    Math.max(0, monthlyCap - reserved)
+  ) {
+    return {
+      allowed: false,
+      reason: "the worst case of this collection would exceed the monthly cap",
+    };
   }
   return { allowed: true, reason: null };
 }
