@@ -9,8 +9,10 @@ import * as p2jobs from "./p2-jobs-store";
 import * as store from "./store";
 import * as ledger from "./ledger-store";
 import { resolveProviderStatus } from "./service";
-import { collectReadyRankTasks, submitDueRankTask } from "./rank-live-service";
+import { submitDueRankTask } from "./rank-live-service";
+import { collectReadyRankTasks } from "./rank-collect-service";
 import { recomputeDerivedState } from "./p2-derived";
+import { recordFixtureRanks } from "./p2-fixtures";
 
 /**
  * Morgana Search Intelligence — phase 2 orchestration.
@@ -23,24 +25,6 @@ import { recomputeDerivedState } from "./p2-derived";
  */
 
 const today = (now: Date = new Date()) => now.toISOString().slice(0, 10);
-
-/** Deterministic fixture rank, so the whole pipeline runs without a credential. */
-function fixtureRank(
-  keyword: string,
-  domain: string,
-  date: string,
-): number | null {
-  let h = 2166136261;
-  for (const ch of `${keyword}|${domain}|${date}`) {
-    h ^= ch.charCodeAt(0);
-    h = Math.imul(h, 16777619);
-  }
-  const v = Math.abs(h) % 100;
-  // Roughly a quarter of keyword/domain pairs do not rank at all — the case the
-  // UI and the maths must handle, so the fixtures must produce it.
-  if (v >= 75) return null;
-  return 1 + (v % 40);
-}
 
 interface RankTickResult {
   due: number;
@@ -81,50 +65,6 @@ function skipReasonFor(input: {
   return input.fixtureRefusedInProduction
     ? "fixture_refused_in_production"
     : undefined;
-}
-
-/**
- * Staging's synthetic rankings, one per entity.
- *
- * Never reached in production — the caller refuses the fixture path there — and
- * kept in its own function so that refusal is a single condition rather than a
- * branch buried in the tick.
- */
-async function recordFixtureRanks(input: {
-  entities: readonly store.SearchEntityRow[];
-  keyword: {
-    id: string;
-    normalizedKeyword: string;
-    locationCode: number;
-    languageCode: string;
-  };
-  date: string;
-  now: Date;
-}): Promise<number> {
-  let recordedCount = 0;
-  for (const entity of input.entities) {
-    const rank = fixtureRank(
-      input.keyword.normalizedKeyword,
-      entity.normalizedDomain,
-      input.date,
-    );
-    const recorded = await p2.recordRank({
-      trackedKeywordId: input.keyword.id,
-      entityId: entity.id,
-      locationCode: input.keyword.locationCode,
-      languageCode: input.keyword.languageCode,
-      rankGroup: rank,
-      rankAbsolute: rank === null ? null : rank + 2,
-      rankingUrl:
-        rank === null
-          ? null
-          : `https://${entity.normalizedDomain}/${input.keyword.normalizedKeyword.replace(/\s+/g, "-")}`,
-      provider: "fixture",
-      now: input.now,
-    });
-    if (recorded) recordedCount += 1;
-  }
-  return recordedCount;
 }
 
 /**

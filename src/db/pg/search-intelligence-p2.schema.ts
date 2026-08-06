@@ -326,6 +326,9 @@ export const siRankTasks = pgTable(
         "normalizing",
         "succeeded",
         "skipped",
+        // Local polling gave up; the provider task may still be alive and the
+        // receipt is still valid. Recoverable by explicit request only.
+        "recovery_pending",
         "failed",
       ],
     }).notNull(),

@@ -60,10 +60,8 @@ vi.mock("./p2-jobs-store", () => ({
   finishJob: vi.fn(),
   recordPhase2Usage: vi.fn(),
 }));
-vi.mock("./rank-live-service", () => ({
-  submitDueRankTask: vi.fn(),
-  collectReadyRankTasks: vi.fn(),
-}));
+vi.mock("./rank-live-service", () => ({ submitDueRankTask: vi.fn() }));
+vi.mock("./rank-collect-service", () => ({ collectReadyRankTasks: vi.fn() }));
 vi.mock("./p2-analytics-store", () => ({
   saveGapSnapshot: vi.fn(),
   saveEvents,
@@ -75,8 +73,8 @@ vi.mock("./p2-derived", () => ({ recomputeDerivedState: vi.fn() }));
 const { readPhase0Config } = await import("../phase0-env");
 const { refreshEntity } = await import("./service");
 const { runRankTick } = await import("./p2-service");
-const { collectReadyRankTasks, submitDueRankTask } =
-  await import("./rank-live-service");
+const { submitDueRankTask } = await import("./rank-live-service");
+const { collectReadyRankTasks } = await import("./rank-collect-service");
 const { recordRank } = await import("./p2-store");
 
 const ENTITY = {

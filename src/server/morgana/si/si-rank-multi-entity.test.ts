@@ -62,7 +62,7 @@ vi.mock("./rank-task-store", () => ({
   resumable,
 }));
 
-const { collectReadyRankTasks } = await import("./rank-live-service");
+const { collectReadyRankTasks } = await import("./rank-collect-service");
 
 const ENTITY = {
   id: "se_1",

@@ -1,18 +1,11 @@
 import { type Phase0Config } from "../phase0-env";
 import { accountFor, type CollectionAccounting } from "./collection-accounting";
 import * as ledger from "./ledger-store";
-import * as p2 from "./p2-store";
-import {
-  collectRankTask,
-  submitRankTask,
-  TASK_GET_ENDPOINT,
-  TASK_POST_ENDPOINT,
-} from "./rank-collector";
+import { submitRankTask, TASK_POST_ENDPOINT } from "./rank-collector";
 import {
   classifyProviderError,
   failureLine,
   logRankFailure,
-  persistenceFailure,
 } from "./rank-errors";
 import { rankPreflight } from "./rank-preflight";
 import * as tasks from "./rank-task-store";
@@ -47,16 +40,12 @@ export const WORST_CASE_SUBMISSION_MICROS = 3_000;
 
 /** How long to wait before first asking whether a queued SERP is ready. */
 const FIRST_CHECK_DELAY_MS = 60_000;
-/** Backoff between subsequent checks, capped so a task cannot drift for hours. */
-const BACKOFF_MS = [60_000, 120_000, 300_000, 600_000];
-/** After this many collection attempts a task is declared expired. */
-const MAX_COLLECT_ATTEMPTS = 8;
 
-const iso = (base: Date, deltaMs: number) =>
+export const iso = (base: Date, deltaMs: number) =>
   new Date(base.getTime() + deltaMs).toISOString();
 
 /** Ledger a call under the shared accounting model, correlated to the job. */
-async function recordAccounting(input: {
+export async function recordAccounting(input: {
   day: string;
   entityId: string;
   jobId: string | null;
@@ -259,177 +248,4 @@ export async function submitDueRankTask(input: {
       accounting,
     };
   }
-}
-
-interface CollectResult {
-  collected: number;
-  pending: number;
-  failed: number;
-  observations: number;
-  keywordsTouched: string[];
-}
-
-/**
- * Collect every task whose result is due, bounded.
- *
- * Free calls, so the budget does not gate them — but they are still counted,
- * and a task that has been asked too many times is declared expired rather than
- * polled forever.
- */
-export async function collectReadyRankTasks(input: {
-  entities: readonly SearchEntityRow[];
-  day: string;
-  limit: number;
-  now?: Date;
-}): Promise<CollectResult> {
-  const now = input.now ?? new Date();
-  const byId = new Map(input.entities.map((entity) => [entity.id, entity]));
-  const due = await tasks.collectableTasks(input.limit);
-  const result: CollectResult = {
-    collected: 0,
-    pending: 0,
-    failed: 0,
-    observations: 0,
-    keywordsTouched: [],
-  };
-  const touched = new Set<string>();
-
-  for (const task of due) {
-    const entity = byId.get(task.entityId);
-    // NO RECEIPT, NO FETCH. `provider_task_id` is the only evidence that this
-    // row corresponds to a real, paid provider task; without it there is
-    // nothing to ask the provider for, and asking anyway would be inventing a
-    // task id. It is also what makes a fixture row uncollectable — fixtures
-    // never receive one.
-    if (!task.providerTaskId) {
-      await tasks.markSkipped({
-        id: task.id,
-        errorCode: "MISSING_PROVIDER_TASK_ID",
-      });
-      continue;
-    }
-    if (!entity) {
-      // The entity was deleted or disabled after the SERP was bought. The
-      // result is unattributable, which is a different fact from a failed
-      // fetch, so it is named separately and no provider call is made.
-      await tasks.markSkipped({ id: task.id, errorCode: "UNKNOWN_ENTITY" });
-      continue;
-    }
-
-    await tasks.markStatus(task.id, "fetching");
-    const outcome = await collectRankTask({
-      providerTaskId: task.providerTaskId,
-      // Fetched once. The SERP is the same page for every entity, so it is read
-      // once and interpreted per entity below.
-      entities: input.entities.map((e) => ({
-        id: e.id,
-        registrableDomain: e.normalizedDomain,
-        includeSubdomains: e.includeSubdomains,
-      })),
-    });
-    await recordAccounting({
-      day: input.day,
-      entityId: entity.id,
-      jobId: task.jobId,
-      endpointPath: TASK_GET_ENDPOINT,
-      meteringClass: "result_fetch",
-      accounting: outcome.accounting,
-      failed: outcome.status === "failed",
-    });
-
-    if (outcome.status === "pending") {
-      const attempt = task.attemptCount;
-      if (attempt + 1 >= MAX_COLLECT_ATTEMPTS) {
-        // Give up asking. The SERP was paid for and never delivered, which is a
-        // provider fact worth naming rather than a silent absence.
-        await tasks.markFailed({
-          id: task.id,
-          origin: "provider",
-          errorClass: "DataForSEOTaskStatus",
-          errorCode: "DATAFORSEO_TASK_EXPIRED",
-          endpoint: TASK_GET_ENDPOINT,
-        });
-        result.failed += 1;
-        continue;
-      }
-      await tasks.markWaiting({
-        id: task.id,
-        nextCheckAt: iso(
-          now,
-          BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)] ?? 600_000,
-        ),
-      });
-      result.pending += 1;
-      continue;
-    }
-
-    if (outcome.status === "failed") {
-      await tasks.markFailed({
-        id: task.id,
-        origin: outcome.failure.origin,
-        errorClass: outcome.failure.errorClass,
-        errorCode: outcome.failure.code,
-        endpoint: outcome.failure.endpoint,
-      });
-      logRankFailure(
-        { trackedKeywordId: task.trackedKeywordId, taskId: task.id },
-        outcome.failure,
-      );
-      result.failed += 1;
-      continue;
-    }
-
-    await tasks.markStatus(task.id, "normalizing");
-    try {
-      // ONE SERP, one observation per tracked entity. Every competitor's
-      // position comes from the same page, which is why this costs one task.
-      for (const [entityId, rank] of Object.entries(outcome.ranks)) {
-        const recorded = await p2.recordRank({
-          trackedKeywordId: task.trackedKeywordId,
-          entityId,
-          locationCode: task.locationCode,
-          languageCode: task.languageCode,
-          rankGroup: rank.rankGroup,
-          rankAbsolute: rank.rankAbsolute,
-          rankingUrl: rank.rankingUrl,
-          rankingDomain: rank.rankingDomain,
-          resultType: rank.resultType,
-          // The SERP was read. "Not found" here is a measurement, so the
-          // observation is complete — `partial` is reserved for an answer the
-          // provider could not fully give, which is not this.
-          snapshotStatus: "complete",
-          providerTaskId: task.providerTaskId,
-          provider: "dataforseo",
-          now,
-        });
-        // A repeated collection of the same task hits the observation dedupe
-        // key and writes nothing. That is the retry being idempotent.
-        if (recorded) {
-          result.observations += 1;
-          touched.add(task.trackedKeywordId);
-        }
-      }
-      await tasks.markSucceeded({ id: task.id, snapshotId: null });
-      result.collected += 1;
-    } catch (error) {
-      // The SERP was bought and delivered; only our own write failed. Its
-      // receipt stays on the row, so the retry is a free re-fetch.
-      const failure = persistenceFailure(error, TASK_GET_ENDPOINT);
-      await tasks.markFailed({
-        id: task.id,
-        origin: failure.origin,
-        errorClass: failure.errorClass,
-        errorCode: failure.code,
-        endpoint: failure.endpoint,
-      });
-      logRankFailure(
-        { trackedKeywordId: task.trackedKeywordId, taskId: task.id },
-        failure,
-      );
-      result.failed += 1;
-    }
-  }
-
-  result.keywordsTouched = [...touched];
-  return result;
 }

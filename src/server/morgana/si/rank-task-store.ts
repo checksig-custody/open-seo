@@ -23,6 +23,7 @@ type RankTaskStatus =
   | "normalizing"
   | "succeeded"
   | "skipped"
+  | "recovery_pending"
   | "failed";
 
 /** Statuses meaning "a paid submission for this work is already in flight". */
@@ -265,6 +266,52 @@ export async function markSucceeded(input: {
       updatedAt: timestamp,
     })
     .where(eq(siRankTasks.id, input.id));
+}
+
+/**
+ * Automatic collection gave up; the provider task did not.
+ *
+ * Running out of LOCAL attempts is a fact about this engine's polling, not
+ * about DataForSEO. Recording it as `failed` with a provider origin asserted
+ * something nobody had observed — and it was wrong in production: the task the
+ * engine declared expired at 16:35:24Z was completed by the provider at
+ * 16:37:29Z, two minutes later. A `failed` row is also unreachable, so the
+ * misclassification threw away a result already paid for.
+ *
+ * `recovery_pending` says exactly what happened and keeps the row recoverable:
+ * the receipt, the job, the attempt count and every timestamp stay, and
+ * `completed_at` is deliberately NOT set, because nothing completed. Automatic
+ * ticks still leave it alone — `collectableTasks` does not select it — so the
+ * attempt cap keeps doing its job of not polling forever.
+ */
+export async function markRecoveryPending(input: {
+  id: string;
+  endpoint: string | null;
+}): Promise<void> {
+  const timestamp = nowIso();
+  await db
+    .update(siRankTasks)
+    .set({
+      status: "recovery_pending",
+      errorOrigin: "collection",
+      errorClass: "CollectionRetryExhausted",
+      errorCode: "DATAFORSEO_COLLECTION_RETRY_EXHAUSTED",
+      endpoint: input.endpoint,
+      lastCheckedAt: timestamp,
+      nextCheckAt: null,
+      updatedAt: timestamp,
+    })
+    .where(eq(siRankTasks.id, input.id));
+}
+
+/** One task by id, for an explicitly requested recovery. */
+export async function taskById(id: string): Promise<RankTaskRow | null> {
+  const rows = await db
+    .select()
+    .from(siRankTasks)
+    .where(eq(siRankTasks.id, id))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export async function markFailed(input: {

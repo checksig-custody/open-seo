@@ -13,6 +13,7 @@ import * as p2jobs from "./p2-jobs-store";
 import * as rankTasks from "./rank-task-store";
 import { bootstrapTrackedKeywords } from "./rank-bootstrap";
 import * as p2service from "./p2-service";
+import * as rankRecovery from "./rank-recovery-service";
 import type { SiRequestContext } from "./router";
 import { DEFAULT_CLUSTERS, type Priority } from "./keywords";
 
@@ -377,6 +378,18 @@ async function dispatchP2Operations(
         { providerStatus },
       ),
     );
+  }
+
+  // Redeem one named receipt. The deliberate counterpart to the attempt cap:
+  // automatic collection stops so it cannot poll forever, and this collects the
+  // result anyway once the provider reports the task complete. Free, and it
+  // cannot buy anything — no keyword is selected and no job is created.
+  if (route === "rank-recover" && method === "POST") {
+    const body = await readJson(request);
+    const taskId = str(body.task_id);
+    if (!taskId) return json({ error: "task_id is required" }, 400);
+    const result = await rankRecovery.recoverRankTaskById(config, taskId);
+    return json(envelope(config, result, { providerStatus }));
   }
 
   if (route === "share-recalculate" && method === "POST") {

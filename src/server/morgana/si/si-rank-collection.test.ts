@@ -40,6 +40,8 @@ const markSucceeded = vi.fn();
 const markFailed = vi.fn();
 const markSkipped = vi.fn();
 const collectableTasks = vi.fn();
+const markRecoveryPending = vi.fn();
+const taskById = vi.fn();
 const resumable = vi.fn();
 
 vi.mock("@/server/lib/dataforseo/client", () => ({
@@ -58,10 +60,12 @@ vi.mock("./rank-task-store", () => ({
   markFailed,
   markSkipped,
   collectableTasks,
+  markRecoveryPending,
+  taskById,
   resumable,
 }));
 
-const { collectReadyRankTasks } = await import("./rank-live-service");
+const { collectReadyRankTasks } = await import("./rank-collect-service");
 
 const ENTITY = {
   id: "se_1",
@@ -270,7 +274,11 @@ describe("collection", () => {
     expect(markWaiting).toHaveBeenCalled();
   });
 
-  it("expires a task that never arrives instead of polling it forever", async () => {
+  it("stops polling at the cap without claiming the provider expired it", async () => {
+    // This assertion used to demand `DATAFORSEO_TASK_EXPIRED` with a provider
+    // origin, and production proved that wrong: the task abandoned at 16:35:24Z
+    // was completed by DataForSEO at 16:37:29Z. Running out of LOCAL attempts is
+    // a fact about our polling, not about the provider.
     collectableTasks.mockResolvedValue([{ ...submittedTask, attemptCount: 7 }]);
     fetchQueuedSerpItems.mockResolvedValue({ status: "pending" });
     const result = await collectReadyRankTasks({
@@ -279,9 +287,26 @@ describe("collection", () => {
       limit: 5,
     });
     expect(result.failed).toBe(1);
-    expect(markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({ errorCode: "DATAFORSEO_TASK_EXPIRED" }),
-    );
+    expect(markRecoveryPending).toHaveBeenCalledWith({
+      id: TASK.id,
+      endpoint: "v3/serp/google/organic/task_get/advanced",
+    });
+    // Never `failed`: a failed row is unreachable, and this one still holds a
+    // valid receipt for a SERP that has been paid for.
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it("keeps a recovery-pending task out of the automatic sweep", async () => {
+    // The cap exists so nothing polls forever. Recovery is deliberate, so the
+    // sweep must not pick the row back up on the next tick.
+    collectableTasks.mockResolvedValue([]);
+    const result = await collectReadyRankTasks({
+      entities: [ENTITY],
+      day: "2026-08-06",
+      limit: 5,
+    });
+    expect(fetchQueuedSerpItems).not.toHaveBeenCalled();
+    expect(result.collected + result.pending + result.failed).toBe(0);
   });
 
   it("records a provider task failure as a provider fault, not an absence", async () => {
