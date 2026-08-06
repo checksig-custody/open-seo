@@ -59,6 +59,15 @@ const isForbiddenId = (value) => FORBIDDEN_ID_HASHES.has(digest(value));
 
 /** Every resource name must say what it is. */
 const REQUIRED_NAME_FRAGMENT = "search-intelligence";
+
+/**
+ * The whole Search Intelligence budget, in USD per month.
+ *
+ * Asserted here so a config asking for more is refused at deploy time rather
+ * than discovered on an invoice. Raising it is a product decision, not a
+ * deployment one.
+ */
+const GLOBAL_MONTHLY_BUDGET_USD = 10;
 const STAGING_FRAGMENT = "staging";
 
 /**
@@ -224,21 +233,59 @@ function main() {
     );
   }
 
-  // Spend posture: the zero-cap invariant, asserted on the committed config so
-  // it cannot regress between deploys.
+  /**
+   * Spend posture, asserted on the committed config so it cannot regress
+   * between deploys.
+   *
+   * This used to demand paid calls off AND both caps zero, in every config.
+   * That was right while no deployment had a budget or a credential, and it
+   * became wrong when production got both: it would have refused to deploy a
+   * correctly funded engine.
+   *
+   * Staging keeps the strict rule — it has no credential, nothing there should
+   * ever spend, and a non-zero cap in a staging config is a mistake worth
+   * blocking. Production may spend, but only within a bounded and coherent
+   * pair: both caps above zero, and the month able to fund the day.
+   *
+   * The global product budget is 10 USD/month. A production config asking for
+   * more than that is refused here rather than discovered on an invoice.
+   */
   const vars = config.vars ?? {};
-  if (vars.SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED !== "false") {
-    violations.push(
-      'SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED must be "false" in Phase 0',
-    );
-  }
-  for (const key of [
-    "SEO_DATAFORSEO_DAILY_COST_CAP_USD",
-    "SEO_DATAFORSEO_MONTHLY_COST_CAP_USD",
-  ]) {
-    if (vars[key] !== "0") {
+  const stage = stageOf(config);
+  const paidCallsOn = vars.SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED === "true";
+  const dailyCap = Number(vars.SEO_DATAFORSEO_DAILY_COST_CAP_USD ?? "0");
+  const monthlyCap = Number(vars.SEO_DATAFORSEO_MONTHLY_COST_CAP_USD ?? "0");
+
+  if (stage === "staging") {
+    if (vars.SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED !== "false") {
       violations.push(
-        `${key} must be "0" in Phase 0 (found ${String(vars[key])})`,
+        'SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED must be "false" in staging — it has no credential and must never spend',
+      );
+    }
+    for (const key of [
+      "SEO_DATAFORSEO_DAILY_COST_CAP_USD",
+      "SEO_DATAFORSEO_MONTHLY_COST_CAP_USD",
+    ]) {
+      if (vars[key] !== "0") {
+        violations.push(
+          `${key} must be "0" in staging (found ${String(vars[key])})`,
+        );
+      }
+    }
+  } else if (paidCallsOn) {
+    if (!(dailyCap > 0) || !(monthlyCap > 0)) {
+      violations.push(
+        `paid calls are enabled with a zero cap (daily=${String(dailyCap)}, monthly=${String(monthlyCap)}) — unbounded spend, refusing`,
+      );
+    }
+    if (monthlyCap < dailyCap) {
+      violations.push(
+        `monthly cap ${String(monthlyCap)} is below the daily cap ${String(dailyCap)} — incoherent budget, refusing`,
+      );
+    }
+    if (monthlyCap > GLOBAL_MONTHLY_BUDGET_USD) {
+      violations.push(
+        `monthly cap ${String(monthlyCap)} exceeds the ${String(GLOBAL_MONTHLY_BUDGET_USD)} USD Search Intelligence budget — refusing`,
       );
     }
   }
@@ -293,9 +340,10 @@ function main() {
   console.log(
     `  worker=${config.name} d1=${config.d1_databases?.[0]?.database_name ?? "none"} r2=${config.r2_buckets?.[0]?.bucket_name ?? "none"}`,
   );
-  console.log(
-    "  no public ingress, no cron, paid calls off, caps zero, telemetry off",
-  );
+  // Report the spend posture that was actually asserted. A summary line saying
+  // "caps zero" under a funded production config would be worse than no line.
+  const spendSummary = `paid calls ${paidCallsOn ? "ON" : "off"}, caps ${String(dailyCap)}/day ${String(monthlyCap)}/month`;
+  console.log(`  no public ingress, no cron, ${spendSummary}, telemetry off`);
 }
 
 main();

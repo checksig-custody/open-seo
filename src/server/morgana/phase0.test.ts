@@ -392,25 +392,64 @@ describe("contract endpoints", () => {
     expect(JSON.stringify(body)).not.toContain("SEO_DATAFORSEO");
   });
 
-  it("is not ready when the spend posture is unsafe", async () => {
+  /**
+   * The spend posture asks whether spending is BOUNDED, not whether it is
+   * impossible.
+   *
+   * It used to ask the latter — paid calls off and both caps zero — which was
+   * right when the engine had no budget and no credential. It became wrong the
+   * moment production had a real one, because it made "funded within a cap"
+   * indistinguishable from "misconfigured" and would have reported a correctly
+   * configured production engine as `not_ready` with a 503.
+   */
+  async function spendPosture(
+    overrides: Record<string, string>,
+  ): Promise<{ status: number | undefined; posture: unknown }> {
     const response = await handlePhase0Request(
       new Request("https://engine.internal/readyz"),
-      {
-        ...env,
+      { ...env, ...overrides },
+    );
+    const body = await readBody(response);
+    const checks = Object.fromEntries(Object.entries(body.checks ?? {}));
+    return { status: response?.status, posture: checks.spend_posture };
+  }
+
+  it("never reaches readyz at all when paid calls are on with no cap", async () => {
+    // Env validation refuses that pair at boot, so the engine fails closed with
+    // no checks rather than serving a degraded readiness. Two independent
+    // controls on the same risk, and this asserts the FIRST one still fires —
+    // which is why the readyz rule below can afford to be about coherence.
+    const { status, posture } = await spendPosture({
+      SEARCH_INTELLIGENCE_ENABLED: "true",
+      SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED: "true",
+      SEO_DATAFORSEO_DAILY_COST_CAP_USD: "0",
+      SEO_DATAFORSEO_MONTHLY_COST_CAP_USD: "0",
+    });
+    expect(status).toBe(500);
+    expect(posture).toBeUndefined();
+  });
+
+  it("is ok when paid calls are funded within coherent caps", async () => {
+    // The real production posture at activation.
+    expect(
+      await spendPosture({
         SEARCH_INTELLIGENCE_ENABLED: "true",
         SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED: "true",
         SEO_DATAFORSEO_DAILY_COST_CAP_USD: "0.20",
         SEO_DATAFORSEO_MONTHLY_COST_CAP_USD: "2",
-      },
-    );
-    // Bindings are absent here too, but the point is that a spendable engine
-    // is never reported ready.
-    expect(response?.status).toBe(503);
-    const body = await readBody(response);
-    const checks = body.checks;
-    expect(typeof checks === "object" && checks !== null).toBe(true);
-    expect(Object.fromEntries(Object.entries(checks ?? {})).spend_posture).toBe(
-      "degraded",
-    );
+      }),
+    ).toMatchObject({ posture: "ok" });
+  });
+
+  it("is ok with paid calls off, whatever the caps say", async () => {
+    // Nothing can spend, so the caps are irrelevant to safety.
+    expect(
+      await spendPosture({
+        SEARCH_INTELLIGENCE_ENABLED: "true",
+        SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED: "false",
+        SEO_DATAFORSEO_DAILY_COST_CAP_USD: "0",
+        SEO_DATAFORSEO_MONTHLY_COST_CAP_USD: "0",
+      }),
+    ).toMatchObject({ posture: "ok" });
   });
 });
