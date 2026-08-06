@@ -12,3 +12,4 @@ export * from "../telemetry.schema";
 // MORGANA LOCAL PATCH (UPSTREAM.md, patch P6).
 export * from "../search-intelligence.schema";
 export * from "../search-intelligence-p2.schema";
+export * from "../search-intelligence-p3.schema";
