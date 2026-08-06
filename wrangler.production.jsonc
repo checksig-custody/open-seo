@@ -164,11 +164,8 @@
     // 3. the two ALERT flags — reach a human.
     // 4. AI_VISIBILITY_LIVE_PROVIDER — the only phase-5 switch that can spend.
     //
-    // TEMPORARILY ON for the phase 2 verification: one authorised SERP task.
-    // Restored to false in the deploy immediately after it.
-    //
-    // PAID_CALLS is normally OFF between phases, and that is a resting state
-    // rather than an unresolved problem.
+    // PAID_CALLS is OFF, and this time that is a resting state rather than an
+    // unresolved problem.
     //
     // Phase 1 is closed: the collector was verified against the real API, the
     // job and the ledger now agree about what a collection cost, and every
@@ -180,7 +177,7 @@
     //
     // Turning it back on is one line plus a deploy, and the caps below already
     // bound what it can do. Do that when phase 2 has a collector to run.
-    "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "true",
+    "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "false",
     "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED": "false",
     "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED": "false",
     "SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED": "false",
