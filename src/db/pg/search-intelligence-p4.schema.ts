@@ -46,6 +46,12 @@ export const siGraphNodes = pgTable(
         "social_profile",
         "campaign",
         "finding",
+        // Phase 5 subjects. Drizzle enforces the enum in TypeScript only, so
+        // extending it needs no DDL — the column stays plain text.
+        "audit_page",
+        "audit_issue",
+        "ai_query",
+        "cited_domain",
       ],
     }).notNull(),
     /** Identifier in the system of record. Never a copy of that record. */
@@ -107,6 +113,11 @@ export const siGraphEdges = pgTable(
         "ASSOCIATED_WITH",
         "PART_OF_CAMPAIGN",
         "TRIGGERED_FINDING",
+        // Phase 5 relationships.
+        "HAS_AUDIT_ISSUE",
+        "CITES",
+        "MENTIONS_IN_AI_RESULT",
+        "REFERENCES_PAGE",
       ],
     }).notNull(),
     weight: real("weight").notNull().default(1),
