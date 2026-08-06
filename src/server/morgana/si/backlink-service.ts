@@ -25,7 +25,7 @@ import {
   type BrandProtectionSignals,
 } from "./brand-protection";
 import { nowIso } from "./ids";
-import { buildEvents } from "./backlink-events";
+import { buildEvents } from "./backlink-findings";
 import { backlinkBudgetAllows, recordBacklinkUsage } from "./backlink-cost";
 
 /**
