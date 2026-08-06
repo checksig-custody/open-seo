@@ -179,14 +179,26 @@ function crawlChecks(page: PageFacts): { issues: AuditIssue[]; stop: boolean } {
         }),
       );
     }
-    const final = page.finalUrl ? canonicalizeUrl(page.finalUrl) : null;
-    if (
-      final &&
-      page.redirectChain.some((hop) => canonicalizeUrl(hop) === final)
-    ) {
+    // A loop is a URL the crawler REQUESTED TWICE, so it is decided on the raw
+    // URLs and never on their canonical forms. Canonicalization deliberately
+    // erases the trailing slash — which is the very difference a `/path` →
+    // `/path/` redirect exists to fix — so comparing canonical forms reports
+    // the most ordinary redirect on the web as a `high` severity loop. That is
+    // not hypothetical: the first real crawl of checksig.com flagged 9 of its
+    // 10 pages this way, each one a single hop that ended in a 200.
+    const requested = [...page.redirectChain];
+    if (page.finalUrl) requested.push(page.finalUrl);
+    const seen = new Set<string>();
+    const repeated = requested.find((hop) => {
+      if (seen.has(hop)) return true;
+      seen.add(hop);
+      return false;
+    });
+    if (repeated !== undefined) {
       issues.push(
         issue("redirect_loop", "crawl", "high", url, {
-          chain: page.redirectChain.slice(0, 6),
+          repeated,
+          chain: requested.slice(0, 6),
         }),
       );
     }

@@ -6,6 +6,7 @@ import {
   siSiteAuditUsageLedger,
 } from "@/db/schema";
 import { newId, nowIso } from "./ids";
+import { chunkForD1 } from "./d1-chunk";
 import type { AuditIssue } from "./site-audit-checks";
 import type { DiffEntry } from "./site-audit-diff";
 
@@ -59,8 +60,8 @@ export async function saveIssues(
 ): Promise<void> {
   if (issues.length === 0) return;
   const at = nowIso();
-  for (let offset = 0; offset < issues.length; offset += 40) {
-    const chunk = issues.slice(offset, offset + 40);
+  // 19 columns per row; see `chunkForD1`.
+  for (const chunk of chunkForD1(issues, 19)) {
     await db
       .insert(siSiteAuditIssues)
       .values(
@@ -190,8 +191,8 @@ export async function saveIssueEvents(
   if (entries.length === 0) return 0;
   const at = nowIso();
   let written = 0;
-  for (let offset = 0; offset < entries.length; offset += 40) {
-    const chunk = entries.slice(offset, offset + 40);
+  // 12 columns per row; see `chunkForD1`.
+  for (const chunk of chunkForD1(entries, 12)) {
     await db
       .insert(siSiteAuditIssueEvents)
       .values(

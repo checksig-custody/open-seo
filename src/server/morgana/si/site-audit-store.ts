@@ -6,6 +6,7 @@ import {
   siSiteAuditPages,
   siSiteAuditRuns,
 } from "@/db/schema";
+import { chunkForD1 } from "./d1-chunk";
 import { newId, nowIso } from "./ids";
 
 /**
@@ -165,10 +166,10 @@ export async function enqueue(
   if (entries.length === 0) return 0;
   const at = nowIso();
   let inserted = 0;
-  // Chunked: D1 binds a limited number of parameters per statement, and a
-  // link-heavy page can discover hundreds of URLs at once.
-  for (let offset = 0; offset < entries.length; offset += 50) {
-    const chunk = entries.slice(offset, offset + 50);
+  // Chunked by BOUND PARAMETERS, not by rows: D1 caps them at 100 per
+  // statement, and a link-heavy page can discover hundreds of URLs at once.
+  // 11 columns per row.
+  for (const chunk of chunkForD1(entries, 11)) {
     await db
       .insert(siSiteAuditFrontier)
       .values(
@@ -307,8 +308,8 @@ export async function saveLinks(
 ): Promise<void> {
   if (links.length === 0) return;
   const at = nowIso();
-  for (let offset = 0; offset < links.length; offset += 50) {
-    const chunk = links.slice(offset, offset + 50);
+  // 9 columns per row; see `chunkForD1`.
+  for (const chunk of chunkForD1(links, 9)) {
     await db
       .insert(siSiteAuditLinks)
       .values(

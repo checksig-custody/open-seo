@@ -7,6 +7,7 @@ import {
   siAiVisibilitySnapshots,
 } from "@/db/schema";
 import { newId, nowIso } from "./ids";
+import { chunkForD1 } from "./d1-chunk";
 import { normalizeQuery } from "./ai-visibility";
 
 /**
@@ -215,25 +216,30 @@ export async function saveCitations(
 ): Promise<void> {
   if (citations.length === 0) return;
   const at = nowIso();
-  await db
-    .insert(siAiVisibilityCitations)
-    .values(
-      citations.slice(0, 50).map((citation) => ({
-        id: newId("aic"),
-        snapshotId,
-        queryId,
-        domain: citation.domain.slice(0, 300),
-        normalizedDomain: citation.normalizedDomain.slice(0, 300),
-        url: citation.url?.slice(0, 2048) ?? null,
-        entityId: citation.entityId,
-        citationOrder: citation.citationOrder,
-        title: citation.title?.slice(0, 300) ?? null,
-        firstSeenAt: at,
-        dedupeKey: `${snapshotId}|${citation.normalizedDomain}`.slice(0, 900),
-        createdAt: at,
-      })),
-    )
-    .onConflictDoNothing({ target: siAiVisibilityCitations.dedupeKey });
+  // At most 50 citations are kept per snapshot, and they are written in
+  // statement-sized batches: 12 columns per row against D1's 100-parameter
+  // ceiling. See `chunkForD1` — one insert of all 50 would bind 600.
+  for (const chunk of chunkForD1(citations.slice(0, 50), 12)) {
+    await db
+      .insert(siAiVisibilityCitations)
+      .values(
+        chunk.map((citation) => ({
+          id: newId("aic"),
+          snapshotId,
+          queryId,
+          domain: citation.domain.slice(0, 300),
+          normalizedDomain: citation.normalizedDomain.slice(0, 300),
+          url: citation.url?.slice(0, 2048) ?? null,
+          entityId: citation.entityId,
+          citationOrder: citation.citationOrder,
+          title: citation.title?.slice(0, 300) ?? null,
+          firstSeenAt: at,
+          dedupeKey: `${snapshotId}|${citation.normalizedDomain}`.slice(0, 900),
+          createdAt: at,
+        })),
+      )
+      .onConflictDoNothing({ target: siAiVisibilityCitations.dedupeKey });
+  }
 }
 
 export async function latestSnapshots(

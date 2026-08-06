@@ -216,14 +216,25 @@ function main() {
       );
     }
   }
+  // What must stay off is what can spend money, reach the network on its own,
+  // or reach a human. `SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED` used to be on
+  // this list and is not any more: from phase 5 it is a feature under
+  // construction, exactly as `SEARCH_INTELLIGENCE_ENABLED` became at phase 1.
+  // What replaced it is stricter, because it names the three phase-5 switches
+  // that are not merely a surface — the crawl SCHEDULER, the ALERTS, and the
+  // live AI PROVIDER, which is the only phase-5 flag that can cost money.
   for (const key of [
     "SEARCH_INTELLIGENCE_MCP_ENABLED",
     "SEARCH_INTELLIGENCE_AI_ENABLED",
-    "SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED",
     "SEARCH_INTELLIGENCE_UI_ENABLED",
+    "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED",
+    "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED",
+    "SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED",
+    "SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED",
   ]) {
-    if (vars[key] !== "false") {
-      violations.push(`${key} must be "false" in Phase 0`);
+    // An absent key is the default, which is "false" for every flag here.
+    if (vars[key] !== undefined && vars[key] !== "false") {
+      violations.push(`${key} must be "false" — it is not a surface flag`);
     }
   }
   // Upstream self-host telemetry is ON by default and posts to a hardcoded
