@@ -306,3 +306,53 @@ describe("result fetch is gated on a receipt, not on spend authority", () => {
     expect(collectReadyRankTasks).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The same rule, for AI Visibility.
+ *
+ * With the live provider off — production's normal state — the provider used to
+ * fall back to fixtures. A fixture AI observation is the worst kind this
+ * subsystem could store: "the model mentioned CheckSig" is a sentence a human
+ * acts on, and nothing reading D1 afterwards could tell it from a measurement.
+ */
+describe("fixture refusal in AI visibility", () => {
+  const envFor = (environment: "staging" | "production") => ({
+    SEARCH_INTELLIGENCE_ENABLED: "true",
+    SEARCH_INTELLIGENCE_ENVIRONMENT: environment,
+    SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED: "true",
+    SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED: "false",
+    SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED: "false",
+    DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY: "present",
+  });
+
+  it("refuses to manufacture an AI observation in production", async () => {
+    const { observeQuery } = await import("./ai-visibility-provider");
+    const env = envFor("production");
+    const observation = await observeQuery(readPhase0Config(env), env, {
+      query: { id: "aq_1", text: "custodia bitcoin" },
+      engine: "chat_gpt",
+      primaryDomains: ["checksig.com"],
+      competitorDomains: ["conio.com"],
+    } as unknown as Parameters<typeof observeQuery>[2]);
+
+    expect(observation.refusalReason).toBe("FIXTURE_IN_PRODUCTION");
+    // Null, not false: "we did not look" is not "the model did not mention it".
+    expect(observation.primaryBrandMentioned).toBeNull();
+    expect(observation.primaryBrandCited).toBeNull();
+    expect(observation.citations).toHaveLength(0);
+  });
+
+  it("still serves fixtures in staging, which is what they are for", async () => {
+    const { observeQuery } = await import("./ai-visibility-provider");
+    const env = envFor("staging");
+    const observation = await observeQuery(readPhase0Config(env), env, {
+      query: { id: "aq_1", text: "custodia bitcoin" },
+      engine: "chat_gpt",
+      primaryDomains: ["checksig.com"],
+      competitorDomains: ["conio.com"],
+    } as unknown as Parameters<typeof observeQuery>[2]);
+
+    expect(observation.source).toBe("fixture");
+    expect(observation.refusalReason).not.toBe("FIXTURE_IN_PRODUCTION");
+  });
+});

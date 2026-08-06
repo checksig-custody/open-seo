@@ -174,6 +174,19 @@ function resolveMode(config: Phase0Config, env: object): AiProviderMode {
   if (
     !isEnabled(config.SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED)
   ) {
+    // A PRODUCTION ENGINE NEVER MANUFACTURES AN AI OBSERVATION.
+    //
+    // With the live provider off — which is production's normal state — this
+    // returned `fixture`, and a fixture AI observation is the worst kind this
+    // subsystem could store: "the model mentioned CheckSig" is a sentence a
+    // human acts on, and nothing reading D1 afterwards could tell it from an
+    // observation. Phases 1, 2 and 3 each closed this hole; phase 5 still had
+    // it open, and it is closed here before any collector can use it.
+    //
+    // Fixtures remain exactly what they are for: staging.
+    if (config.SEARCH_INTELLIGENCE_ENVIRONMENT === "production") {
+      return "refused";
+    }
     return "fixture";
   }
   if (!isEnabled(config.SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED))
@@ -198,6 +211,17 @@ export async function observeQuery(
 ): Promise<AiAnswerObservation> {
   const mode = resolveMode(config, env);
   if (mode === "fixture") return Promise.resolve(fixtureObservation(context));
+  if (
+    mode === "refused" &&
+    !isEnabled(
+      config.SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED,
+    ) &&
+    config.SEARCH_INTELLIGENCE_ENVIRONMENT === "production"
+  ) {
+    // Named, so the refusal is legible in the read model rather than looking
+    // like a missing credential.
+    return Promise.resolve(refusal("FIXTURE_IN_PRODUCTION"));
+  }
   return Promise.resolve(
     refusal(
       mode === "refused"
