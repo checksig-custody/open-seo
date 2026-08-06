@@ -1,6 +1,10 @@
 import type { Phase0Config } from "../phase0-env";
 import { resolveProviderStatus } from "./service";
 import {
+  backlinkPersistenceFailure,
+  logBacklinkFailure,
+} from "./backlink-errors";
+import {
   backlinkDedupeKey,
   normalizeAnchor,
   normalizeBacklinkDomain,
@@ -162,6 +166,21 @@ export async function refreshBacklinks(
   });
 
   if (!collected.providerOk) {
+    // A live failure explains itself once, sanitized, at the boundary that knew
+    // what happened. A fixture provider never fails, so there is nothing to log
+    // for it — and the absence of a code is itself informative.
+    if (collected.failure) {
+      logBacklinkFailure(
+        { entityId, jobId: null },
+        {
+          origin: collected.failure.origin as "provider",
+          code: collected.failure.code,
+          errorClass: collected.failure.errorClass,
+          message: collected.failure.message,
+          endpoint: collected.failure.endpoint,
+        },
+      );
+    }
     // Record the failed pass so the gap in history is visible, then stop. No
     // diff, no events: we learned nothing about what exists.
     await store.saveSnapshot({
@@ -224,7 +243,19 @@ export async function refreshBacklinks(
       }),
     };
   });
-  await store.upsertBacklinks(upserts);
+  try {
+    await store.upsertBacklinks(upserts);
+  } catch (error) {
+    // THE PROVIDER SUCCEEDED; WE FAILED. The call is already in the ledger a
+    // few lines above, which is the order that keeps the money recorded when
+    // the data is lost. Blaming the provider here would send the next reader to
+    // the wrong logs, so the origin is `persistence` and the cost stays.
+    logBacklinkFailure(
+      { entityId, jobId: null },
+      backlinkPersistenceFailure(error, "backlinks/persist"),
+    );
+    throw error;
+  }
 
   // --- diff ---------------------------------------------------------------
   const diff = diffSnapshots(

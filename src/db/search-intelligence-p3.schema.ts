@@ -73,6 +73,14 @@ export const siBacklinks = sqliteTable(
     updatedAt: text("updated_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    source: text("source").notNull().default("fixture"),
+    sourceMainDomain: text("source_main_domain"),
+    targetDomain: text("target_domain"),
+    backlinkType: text("backlink_type"),
+    isBroken: integer("is_broken", { mode: "boolean" }),
+    language: text("language"),
+    /** The sampled collection this row came from. */
+    snapshotId: text("snapshot_id"),
   },
   (table) => [
     uniqueIndex("si_backlinks_dedupe_idx").on(table.dedupeKey),
@@ -118,6 +126,25 @@ export const siBacklinkSnapshots = sqliteTable(
     createdAt: text("created_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    /** `dataforseo` or `fixture`. The question an export needs to answer. */
+    source: text("source").notNull().default("fixture"),
+    /** `complete` / `partial` / `no_data` — three different provider answers. */
+    snapshotStatus: text("snapshot_status").notNull().default("complete"),
+    snapshotStatusReason: text("snapshot_status_reason"),
+    /** THE SAMPLE, STATED. A backlink absent from 100 sampled rows of a
+     * 10,000-row profile has not been lost; it has not been looked at. */
+    sampleLimit: integer("sample_limit"),
+    sampleOffset: integer("sample_offset"),
+    /** Sampled / reported total. Null when the provider states no total. */
+    datasetCoverage: real("dataset_coverage"),
+    reportedBacklinkTotal: integer("reported_backlink_total"),
+    reportedReferringDomainTotal: integer("reported_referring_domain_total"),
+    /** The request shape, so only like-for-like snapshots are compared. */
+    datasetSignature: text("dataset_signature"),
+    costStatus: text("cost_status"),
+    providerReportedCostMicros: integer("provider_reported_cost_micros"),
+    jobId: text("job_id"),
+    operationId: text("operation_id"),
   },
   (table) => [
     uniqueIndex("si_backlink_snapshots_dedupe_idx").on(table.dedupeKey),
@@ -160,6 +187,11 @@ export const siReferringDomains = sqliteTable(
     updatedAt: text("updated_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    source: text("source").notNull().default("fixture"),
+    referringMainDomain: text("referring_main_domain"),
+    dofollowCount: integer("dofollow_count"),
+    nofollowCount: integer("nofollow_count"),
+    language: text("language"),
   },
   (table) => [
     uniqueIndex("si_referring_domains_dedupe_idx").on(
@@ -207,6 +239,10 @@ export const siAnchorSnapshots = sqliteTable(
     createdAt: text("created_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    dofollowCount: integer("dofollow_count"),
+    nofollowCount: integer("nofollow_count"),
+    /** Share of the SAMPLE. Null when the denominator is unknown. */
+    sharePercent: real("share_percent"),
   },
   (table) => [
     uniqueIndex("si_anchor_snapshots_dedupe_idx").on(
@@ -347,6 +383,13 @@ export const siBacklinkUsageLedger = sqliteTable(
     updatedAt: text("updated_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    costStatus: text("cost_status"),
+    providerReportedCostMicros: integer("provider_reported_cost_micros"),
+    freeRequests: integer("free_requests").notNull().default(0),
+    /** Empty string, not NULL: SQLite treats NULLs as distinct in a unique
+     * index, which is how the phase-1 ledger stopped deduplicating. */
+    jobId: text("job_id").notNull().default(""),
+    operationId: text("operation_id").notNull().default(""),
   },
   (table) => [
     uniqueIndex("si_backlink_usage_dedupe_idx").on(
@@ -390,6 +433,14 @@ export const siBacklinkJobs = sqliteTable(
     createdAt: text("created_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    operationId: text("operation_id"),
+    /** What this job spent, without joining the ledger through a timestamp. */
+    actualCostMicros: integer("actual_cost_micros").notNull().default(0),
+    costStatus: text("cost_status"),
+    errorOrigin: text("error_origin"),
+    errorClass: text("error_class"),
+    errorCode: text("error_code"),
+    endpoint: text("endpoint"),
   },
   (table) => [
     uniqueIndex("si_backlink_jobs_dedupe_idx").on(table.dedupeKey),
@@ -430,6 +481,10 @@ export const siBacklinkGapSnapshots = sqliteTable(
     createdAt: text("created_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    datasetCoverage: real("dataset_coverage"),
+    sampleLimit: integer("sample_limit"),
+    exclusionReasons: text("exclusion_reasons"),
+    calculatedAt: text("calculated_at"),
   },
   (table) => [
     uniqueIndex("si_backlink_gap_dedupe_idx").on(

@@ -2,6 +2,10 @@ import {
   normalizeBacklinkDomain,
   normalizeBacklinkUrl,
 } from "./backlink-normalize";
+import {
+  collectLiveBacklinks,
+  DEFAULT_SAMPLE_LIMIT,
+} from "./backlink-live-collector";
 
 /**
  * Morgana Search Intelligence — phase 3 provider boundary.
@@ -69,6 +73,33 @@ export interface CollectionResult {
   actualCostMicros: number;
   /** Set when collection stopped early for a reason other than "no more data". */
   truncatedReason: string | null;
+  /**
+   * What a REAL collection knows and a fixture never had to.
+   *
+   * A fixture answers completely and free; a provider answers about a sample of
+   * a much larger index, sometimes partially, and charges. These fields carry
+   * that difference to the store, so a truncated sample can never be read as a
+   * whole profile — which is the one way this feature could lie.
+   */
+  source?: "dataforseo" | "fixture";
+  snapshotStatus?: "complete" | "partial" | "no_data";
+  snapshotStatusReason?: string | null;
+  sampleLimit?: number | null;
+  reportedReferringDomainTotal?: number | null;
+  /** Sampled / reported. Null when the provider states no total to divide by. */
+  datasetCoverage?: number | null;
+  /** The request shape, so only like-for-like snapshots are ever compared. */
+  datasetSignature?: string | null;
+  costStatus?: "reported" | "zero" | "not_reported";
+  providerReportedCostMicros?: number | null;
+  /** Typed, sanitized, and absent when the collection succeeded. */
+  failure?: {
+    origin: string;
+    code: string;
+    errorClass: string;
+    message: string;
+    endpoint: string | null;
+  } | null;
 }
 
 export interface CollectionLimits {
@@ -295,40 +326,135 @@ export function createFixtureBacklinkProvider(
 /**
  * The DataForSEO-backed provider.
  *
- * Deliberately a refusal rather than a stub that returns empty data: an empty
- * result would flow into new/lost detection and look like every backlink had
- * vanished. Refusing keeps the snapshot `not_comparable`, which is the honest
- * state when we cannot collect at all.
+ * Was a deliberate refusal while no credential existed — empty data with
+ * `providerOk: false`, so an empty result could never flow into new/lost
+ * detection and look like every backlink had vanished. The credential exists
+ * now, so it collects.
+ *
+ * The refusal survives in a stronger form: anything other than a completed
+ * provider response still returns `providerOk: false` with a typed failure, and
+ * the caller keeps the snapshot `not_comparable` rather than storing an absence
+ * as a fact.
  */
 export function createLiveBacklinkProvider(): BacklinkProvider {
   return {
     name: "live",
-    collect() {
-      return Promise.resolve({
-        profile: {
-          backlinkCount: null,
-          referringDomainCount: null,
-          dofollowCount: null,
-          nofollowCount: null,
-          newBacklinks: null,
-          lostBacklinks: null,
-          newReferringDomains: null,
-          lostReferringDomains: null,
-          spamScore: null,
-        },
-        backlinks: [],
-        referringDomains: [],
-        provider: "live",
-        providerOk: false,
-        reportedBacklinkTotal: null,
-        estimatedCostMicros: 0,
-        actualCostMicros: 0,
-        truncatedReason:
-          "DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY is not configured; paid backlink collection is disabled",
+    async collect(input) {
+      // The sample is the smaller of what the caller asked for and what this
+      // collector will pay for: cost scales with returned rows, and a first
+      // live run should be inspectable rather than exhaustive.
+      const sampleLimit = Math.min(
+        input.limits.backlinks,
+        input.limits.referringDomains,
+        DEFAULT_SAMPLE_LIMIT,
+      );
+      const outcome = await collectLiveBacklinks({
+        target: input.target,
+        sampleLimit,
       });
+
+      if (outcome.status === "failed") {
+        return {
+          profile: EMPTY_PROFILE,
+          backlinks: [],
+          referringDomains: [],
+          provider: "dataforseo",
+          // The whole point: a failure is not an empty profile.
+          providerOk: false,
+          reportedBacklinkTotal: null,
+          estimatedCostMicros: outcome.accounting.estimatedCostMicros,
+          actualCostMicros: outcome.accounting.actualCostMicros,
+          truncatedReason: outcome.failure.message,
+          source: "dataforseo",
+          snapshotStatus: "no_data",
+          snapshotStatusReason: outcome.failure.message,
+          sampleLimit,
+          reportedReferringDomainTotal: null,
+          datasetCoverage: null,
+          datasetSignature: null,
+          costStatus: outcome.accounting.costStatus,
+          providerReportedCostMicros: outcome.accounting.actualCostMicros,
+          failure: outcome.failure,
+        };
+      }
+
+      const sampled = outcome.backlinks.length;
+      const reported = outcome.reportedTotals.backlinks;
+      return {
+        profile: {
+          backlinkCount: outcome.profile.backlinkCount,
+          referringDomainCount: outcome.profile.referringDomainCount,
+          dofollowCount: outcome.profile.dofollowCount,
+          nofollowCount: outcome.profile.nofollowCount,
+          newBacklinks: outcome.profile.newBacklinks,
+          lostBacklinks: outcome.profile.lostBacklinks,
+          newReferringDomains: outcome.profile.newReferringDomains,
+          lostReferringDomains: outcome.profile.lostReferringDomains,
+          spamScore: outcome.profile.spamScore,
+        },
+        backlinks: outcome.backlinks.map((row) => ({
+          sourceUrl: row.sourceUrl,
+          sourceDomain: row.sourceDomain,
+          targetUrl: row.targetUrl,
+          anchorText: row.anchorText,
+          linkType: row.backlinkType ?? "unknown",
+          isDofollow: row.isDofollow,
+          firstSeen: row.firstSeen,
+          lastSeen: row.lastSeen,
+          isLost: row.lostDate === null ? null : true,
+          domainRank: row.domainRank,
+          pageRank: row.pageRank,
+          spamScore: row.spamScore,
+          providerBacklinkId: row.providerBacklinkId,
+        })),
+        referringDomains: outcome.referringDomains.map((row) => ({
+          domain: row.domain,
+          backlinkCount: row.backlinkCount,
+          targetPageCount: null,
+          domainRank: row.domainRank,
+          spamScore: row.spamScore,
+          firstSeen: row.firstSeen,
+          country: row.country,
+        })),
+        provider: "dataforseo",
+        providerOk: true,
+        reportedBacklinkTotal: reported,
+        estimatedCostMicros: outcome.accounting.estimatedCostMicros,
+        actualCostMicros: outcome.accounting.actualCostMicros,
+        truncatedReason: outcome.snapshotStatusReason,
+        source: "dataforseo",
+        snapshotStatus: outcome.snapshotStatus,
+        snapshotStatusReason: outcome.snapshotStatusReason,
+        sampleLimit: outcome.sampleLimit,
+        reportedReferringDomainTotal: outcome.reportedTotals.referringDomains,
+        // Coverage is only computable against a total the provider stated. A
+        // ratio invented from the sample itself would always read 1.0 and mean
+        // nothing.
+        datasetCoverage:
+          reported === null || reported === 0
+            ? null
+            : Math.min(1, sampled / reported),
+        datasetSignature: `live|${String(outcome.sampleLimit)}|subdomains=on|status=live|internal=excluded`,
+        costStatus: outcome.accounting.costStatus,
+        providerReportedCostMicros: outcome.accounting.actualCostMicros,
+        failure: null,
+      };
     },
   };
 }
+
+/** Nothing known about anything — the shape a refusal returns. */
+const EMPTY_PROFILE: BacklinkProfile = {
+  backlinkCount: null,
+  referringDomainCount: null,
+  dofollowCount: null,
+  nofollowCount: null,
+  newBacklinks: null,
+  lostBacklinks: null,
+  newReferringDomains: null,
+  lostReferringDomains: null,
+  spamScore: null,
+};
 
 /** Map a raw provider row onto the normalized shape the store persists. */
 export function normalizeRawBacklink(raw: RawBacklink): {
