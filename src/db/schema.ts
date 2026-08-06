@@ -11,6 +11,7 @@ import * as sqliteTelemetry from "./telemetry.schema";
 import * as sqliteSearchIntelligence from "./search-intelligence.schema";
 import * as sqliteSearchIntelligenceP2 from "./search-intelligence-p2.schema";
 import * as sqliteSearchIntelligenceP3 from "./search-intelligence-p3.schema";
+import * as sqliteSearchIntelligenceP4 from "./search-intelligence-p4.schema";
 import * as pgApp from "./pg/app.schema";
 import * as pgAudit from "./pg/audit.schema";
 import * as pgSam from "./pg/sam.schema";
@@ -22,6 +23,7 @@ import * as pgTelemetry from "./pg/telemetry.schema";
 import * as pgSearchIntelligence from "./pg/search-intelligence.schema";
 import * as pgSearchIntelligenceP2 from "./pg/search-intelligence-p2.schema";
 import * as pgSearchIntelligenceP3 from "./pg/search-intelligence-p3.schema";
+import * as pgSearchIntelligenceP4 from "./pg/search-intelligence-p4.schema";
 
 // Canonical schema barrel. Repositories import their tables from here and the
 // provider-aware `db` from "@/db", so each repository is written ONCE for both
@@ -43,7 +45,8 @@ type AppSchema = typeof sqliteApp &
   typeof sqliteTelemetry &
   typeof sqliteSearchIntelligence &
   typeof sqliteSearchIntelligenceP2 &
-  typeof sqliteSearchIntelligenceP3;
+  typeof sqliteSearchIntelligenceP3 &
+  typeof sqliteSearchIntelligenceP4;
 
 const runtimeSchema =
   getDatabaseProvider() === "postgres"
@@ -59,6 +62,7 @@ const runtimeSchema =
         ...pgSearchIntelligence,
         ...pgSearchIntelligenceP2,
         ...pgSearchIntelligenceP3,
+        ...pgSearchIntelligenceP4,
       }
     : {
         ...sqliteApp,
@@ -72,6 +76,7 @@ const runtimeSchema =
         ...sqliteSearchIntelligence,
         ...sqliteSearchIntelligenceP2,
         ...sqliteSearchIntelligenceP3,
+        ...sqliteSearchIntelligenceP4,
       };
 
 // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- guarded by schema-parity.test.ts
@@ -135,4 +140,13 @@ export const {
   siBacklinkUsageLedger,
   siBacklinkJobs,
   siBacklinkGapSnapshots,
+  // MORGANA LOCAL PATCH (UPSTREAM.md, patch P9).
+  siGraphNodes,
+  siGraphEdges,
+  siGraphEvidence,
+  siCampaigns,
+  siCampaignSignals,
+  siReputationFindings,
+  siTimelineEvents,
+  siCorrelationCheckpoints,
 } = schema;
