@@ -57,9 +57,37 @@ const digest = (value) =>
 const isForbiddenName = (value) => FORBIDDEN_NAME_HASHES.has(digest(value));
 const isForbiddenId = (value) => FORBIDDEN_ID_HASHES.has(digest(value));
 
-/** Every resource name must say what it is and that it is not production. */
+/** Every resource name must say what it is. */
 const REQUIRED_NAME_FRAGMENT = "search-intelligence";
-const REQUIRED_STAGE_FRAGMENT = "staging";
+const STAGING_FRAGMENT = "staging";
+
+/**
+ * The stage a config claims, and the rule that its resources must agree.
+ *
+ * This used to be "every resource name must contain `staging`", which was the
+ * right check while staging was the only deployment and the only risk was
+ * touching Morgana production. Now that a production engine exists the risk is
+ * symmetric, so the check is too: a `staging` config may only touch resources
+ * whose names say `staging`, and a `production` config may only touch resources
+ * whose names do NOT. That catches the mistake this file exists to prevent —
+ * deploying one environment's code against the other's database — in both
+ * directions, which the old one-way check could not.
+ */
+function stageOf(config) {
+  const declared = config?.vars?.SEARCH_INTELLIGENCE_ENVIRONMENT;
+  return declared === "production" ? "production" : "staging";
+}
+
+function stageViolation(kind, value, stage) {
+  const saysStaging = value.toLowerCase().includes(STAGING_FRAGMENT);
+  if (stage === "staging" && !saysStaging) {
+    return `${kind} "${value}" does not contain "${STAGING_FRAGMENT}" — a staging config must not touch production resources`;
+  }
+  if (stage === "production" && saysStaging) {
+    return `${kind} "${value}" contains "${STAGING_FRAGMENT}" — a production config must not touch staging resources`;
+  }
+  return null;
+}
 
 function stripJsonComments(text) {
   // The config is JSONC: strip // and /* */ comments and trailing commas.
@@ -119,11 +147,12 @@ function main() {
         `migration target "${expected}" is a Morgana production database — refusing`,
       );
     }
-    if (!expected.toLowerCase().includes(REQUIRED_STAGE_FRAGMENT)) {
-      violations.push(
-        `migration target "${expected}" does not contain "${REQUIRED_STAGE_FRAGMENT}" — phase 1 migrates staging only`,
-      );
-    }
+    const mismatch = stageViolation(
+      "migration target",
+      expected,
+      stageOf(config),
+    );
+    if (mismatch) violations.push(mismatch);
     if (configured !== expected) {
       violations.push(
         `migration target "${expected}" does not match the configured d1 database "${String(configured)}" — ambiguous binding, refusing`,
@@ -168,11 +197,8 @@ function main() {
         `${kind} "${value}" does not contain "${REQUIRED_NAME_FRAGMENT}" — every resource must be identifiable as Search Intelligence`,
       );
     }
-    if (!normalized.includes(REQUIRED_STAGE_FRAGMENT)) {
-      violations.push(
-        `${kind} "${value}" does not contain "${REQUIRED_STAGE_FRAGMENT}" — Phase 0 provisions staging only`,
-      );
-    }
+    const mismatch = stageViolation(kind, String(value), stageOf(config));
+    if (mismatch) violations.push(mismatch);
   }
 
   // Deploy posture: no public ingress is the compensating control for the
