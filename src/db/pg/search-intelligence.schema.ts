@@ -169,6 +169,9 @@ export const domainRefreshJobs = pgTable(
     skipReason: text("skip_reason"),
     estimatedCostMicros: integer("estimated_cost_micros").notNull().default(0),
     actualCostMicros: integer("actual_cost_micros").notNull().default(0),
+    costStatus: text("cost_status", {
+      enum: ["reported", "zero", "not_reported"],
+    }),
     snapshotId: text("snapshot_id"),
     createdAt: timestampColumn("created_at").notNull().default(isoNow),
     startedAt: timestampColumn("started_at"),
@@ -187,6 +190,7 @@ export const searchUsageLedger = pgTable(
     id: text("id").primaryKey(),
     day: text("day").notNull(),
     entityId: text("entity_id"),
+    jobId: text("job_id").notNull().default(""),
     endpointPath: text("endpoint_path").notNull(),
     meteringClass: text("metering_class", {
       enum: [
@@ -203,6 +207,12 @@ export const searchUsageLedger = pgTable(
     retryRequests: integer("retry_requests").notNull().default(0),
     estimatedCostMicros: integer("estimated_cost_micros").notNull().default(0),
     actualCostMicros: integer("actual_cost_micros").notNull().default(0),
+    costReportedRequests: integer("cost_reported_requests")
+      .notNull()
+      .default(0),
+    costNotReportedRequests: integer("cost_not_reported_requests")
+      .notNull()
+      .default(0),
     cacheHits: integer("cache_hits").notNull().default(0),
     cacheMisses: integer("cache_misses").notNull().default(0),
     blockedByBudget: integer("blocked_by_budget").notNull().default(0),
@@ -213,8 +223,10 @@ export const searchUsageLedger = pgTable(
       table.day,
       table.endpointPath,
       table.meteringClass,
+      table.jobId,
     ),
     index("search_usage_ledger_day_idx").on(table.day),
+    index("search_usage_ledger_job_idx").on(table.jobId),
   ],
 );
 

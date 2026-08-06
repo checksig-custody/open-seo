@@ -163,17 +163,20 @@
     //    asking. Outward-facing, so it is never a side effect of anything else.
     // 3. the two ALERT flags — reach a human.
     // 4. AI_VISIBILITY_LIVE_PROVIDER — the only phase-5 switch that can spend.
-    // OFF again after the calibration attempt of 2026-08-06.
     //
-    // The credential is present and the engine reports `dataforseo: configured`,
-    // but no live collector exists to use it: phases 1, 2 and 3 each ship an
-    // explicit refusal stub (`live_collection_not_enabled`, and a backlink
-    // provider that returns `providerOk: false`), and the Search Intelligence
-    // context imports nothing from `src/server/lib/dataforseo/`. Enabling paid
-    // calls therefore grants spend authority that nothing can exercise, and an
-    // authority nobody needs should not be left switched on.
+    // PAID_CALLS is OFF, and this time that is a resting state rather than an
+    // unresolved problem.
     //
-    // Turn this back on in the same commit that wires the first real collector.
+    // Phase 1 is closed: the collector was verified against the real API, the
+    // job and the ledger now agree about what a collection cost, and every
+    // number in the activation report was read back from production. Nothing
+    // between here and phase 2 needs to spend, and an authority nobody is using
+    // should not be left switched on — the engine has no cron, but the flag is
+    // the control that decides whether a call CAN be paid for, not whether
+    // something is currently calling.
+    //
+    // Turning it back on is one line plus a deploy, and the caps below already
+    // bound what it can do. Do that when phase 2 has a collector to run.
     "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "false",
     "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED": "false",
     "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED": "false",
