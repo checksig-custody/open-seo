@@ -69,6 +69,56 @@ describe("page checks", () => {
     expect(checkPage(page(), site)).toEqual([]);
   });
 
+  // Regression cover for the false positive the first real crawl of
+  // checksig.com produced: 9 of its 10 pages were reported as `redirect_loop`
+  // at `high` severity, each one an ordinary single-hop redirect that ended in
+  // a 200. The cause was comparing CANONICAL urls, and canonicalization erases
+  // the trailing slash that the redirect exists to add.
+  it("does not call a trailing-slash redirect a loop", () => {
+    // The exact shape observed in production.
+    const found = checkPage(
+      page({
+        url: "https://www.checksig.com/eu/en",
+        redirectChain: ["https://www.checksig.com/eu/en"],
+        finalUrl: "https://www.checksig.com/eu/en/",
+      }),
+      site,
+    );
+    expect(types(found)).not.toContain("redirect_loop");
+  });
+
+  it("does not call an http to https or apex to www redirect a loop", () => {
+    for (const [from, to] of [
+      ["http://checksig.com/servizi", "https://checksig.com/servizi"],
+      ["https://checksig.com/servizi", "https://www.checksig.com/servizi"],
+    ]) {
+      const found = checkPage(
+        page({ url: from, redirectChain: [from], finalUrl: to }),
+        site,
+      );
+      expect(types(found), `${from} -> ${to}`).not.toContain("redirect_loop");
+    }
+  });
+
+  it("still reports a genuine loop, where a url is requested twice", () => {
+    const found = checkPage(
+      page({
+        redirectChain: [
+          "https://checksig.com/a",
+          "https://checksig.com/b",
+          "https://checksig.com/a",
+        ],
+        finalUrl: "https://checksig.com/b",
+      }),
+      site,
+    );
+    expect(types(found)).toContain("redirect_loop");
+    const loop = found.find((entry) => entry.issueType === "redirect_loop");
+    expect(loop?.severity).toBe("high");
+    // The repeated url is named, so the finding can be acted on.
+    expect(loop?.details.repeated).toBe("https://checksig.com/a");
+  });
+
   it("rates a homepage failure higher than an inner page failure", () => {
     const inner = checkPage(page({ statusCode: 500 }), site)[0];
     const home = checkPage(
