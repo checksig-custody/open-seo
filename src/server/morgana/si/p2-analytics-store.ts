@@ -28,6 +28,7 @@ export async function saveGapSnapshot(input: {
   bestCompetitorRank: number | null;
   bestCompetitorEntityId: string | null;
   opportunityScore: number | null;
+  opportunityScoreReason?: string | null;
 }): Promise<void> {
   await db
     .insert(keywordGapSnapshots)
@@ -40,6 +41,7 @@ export async function saveGapSnapshot(input: {
       bestCompetitorRank: input.bestCompetitorRank,
       bestCompetitorEntityId: input.bestCompetitorEntityId,
       opportunityScore: input.opportunityScore,
+      opportunityScoreReason: input.opportunityScoreReason ?? null,
       createdAt: nowIso(),
     })
     .onConflictDoUpdate({
@@ -53,6 +55,7 @@ export async function saveGapSnapshot(input: {
         bestCompetitorRank: input.bestCompetitorRank,
         bestCompetitorEntityId: input.bestCompetitorEntityId,
         opportunityScore: input.opportunityScore,
+        opportunityScoreReason: input.opportunityScoreReason ?? null,
       },
     });
 }
@@ -74,6 +77,12 @@ export async function saveShareSnapshot(input: {
   reason?: string | null;
   keywordsConsidered: number;
   keywordsCovered: number;
+  eligibleKeywords?: number;
+  excludedKeywords?: number;
+  /** Serialized `SosExclusions`, so a shortfall names which input is missing. */
+  exclusionReasons?: string | null;
+  coverage?: number | null;
+  calculatedAt?: string | null;
   ctrModelVersion: string;
 }): Promise<void> {
   await db
@@ -89,6 +98,11 @@ export async function saveShareSnapshot(input: {
       reason: input.reason ?? null,
       keywordsConsidered: input.keywordsConsidered,
       keywordsCovered: input.keywordsCovered,
+      eligibleKeywords: input.eligibleKeywords ?? 0,
+      excludedKeywords: input.excludedKeywords ?? 0,
+      exclusionReasons: input.exclusionReasons ?? null,
+      coverage: input.coverage ?? null,
+      calculatedAt: input.calculatedAt ?? null,
       ctrModelVersion: input.ctrModelVersion,
       createdAt: nowIso(),
     })
@@ -106,6 +120,11 @@ export async function saveShareSnapshot(input: {
         keywordsConsidered: input.keywordsConsidered,
         keywordsCovered: input.keywordsCovered,
         ctrModelVersion: input.ctrModelVersion,
+        eligibleKeywords: input.eligibleKeywords ?? 0,
+        excludedKeywords: input.excludedKeywords ?? 0,
+        exclusionReasons: input.exclusionReasons ?? null,
+        coverage: input.coverage ?? null,
+        calculatedAt: input.calculatedAt ?? null,
       },
     });
 }

@@ -14,6 +14,7 @@ import * as rankTasks from "./rank-task-store";
 import { bootstrapTrackedKeywords } from "./rank-bootstrap";
 import * as p2service from "./p2-service";
 import * as rankRecovery from "./rank-recovery-service";
+import { dispatchKeywordVolume } from "./p2-volume-router";
 import type { SiRequestContext } from "./router";
 import { DEFAULT_CLUSTERS, type Priority } from "./keywords";
 
@@ -390,6 +391,11 @@ async function dispatchP2Operations(
     if (!taskId) return json({ error: "task_id is required" }, 400);
     const result = await rankRecovery.recoverRankTaskById(config, taskId);
     return json(envelope(config, result, { providerStatus }));
+  }
+
+  {
+    const handled = await dispatchKeywordVolume(ctx);
+    if (handled) return handled;
   }
 
   if (route === "share-recalculate" && method === "POST") {

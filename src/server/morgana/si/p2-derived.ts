@@ -54,6 +54,7 @@ export async function recomputeDerivedState(input: {
     bestCompetitorRank: gap.bestCompetitorRank,
     bestCompetitorEntityId: gap.bestCompetitorEntityId,
     opportunityScore: gap.opportunityScore,
+    opportunityScoreReason: gap.opportunityScoreReason,
   });
 
   if (

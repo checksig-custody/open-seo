@@ -211,6 +211,8 @@ export const keywordGapSnapshots = sqliteTable(
     bestCompetitorEntityId: text("best_competitor_entity_id"),
     /** Simple, explainable: volume × gap size. Never an opaque composite. */
     opportunityScore: real("opportunity_score"),
+    /** Why a score is absent, not merely that it is. */
+    opportunityScoreReason: text("opportunity_score_reason"),
     createdAt: text("created_at")
       .notNull()
       .default(sql`(current_timestamp)`),
@@ -244,6 +246,15 @@ export const shareOfSearchSnapshots = sqliteTable(
     reason: text("reason"),
     keywordsConsidered: integer("keywords_considered").notNull().default(0),
     keywordsCovered: integer("keywords_covered").notNull().default(0),
+    /** Volume known and above zero: the keywords that could carry weight. */
+    eligibleKeywords: integer("eligible_keywords").notNull().default(0),
+    /** Dropped before weighting, for the reasons in `exclusionReasons`. */
+    excludedKeywords: integer("excluded_keywords").notNull().default(0),
+    /** JSON: `{ volume_unknown: n, volume_zero: n, no_position: n }`. */
+    exclusionReasons: text("exclusion_reasons"),
+    /** Covered / eligible. Null when nothing was eligible to cover. */
+    coverage: real("coverage"),
+    calculatedAt: text("calculated_at"),
     /** Which CTR curve produced this number. Changing the curve changes history. */
     ctrModelVersion: text("ctr_model_version").notNull(),
     createdAt: text("created_at")

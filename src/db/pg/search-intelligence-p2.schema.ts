@@ -156,6 +156,7 @@ export const keywordGapSnapshots = pgTable(
     bestCompetitorRank: integer("best_competitor_rank"),
     bestCompetitorEntityId: text("best_competitor_entity_id"),
     opportunityScore: real("opportunity_score"),
+    opportunityScoreReason: text("opportunity_score_reason"),
     createdAt: timestampColumn("created_at").notNull().default(isoNow),
   },
   (table) => [
@@ -185,6 +186,11 @@ export const shareOfSearchSnapshots = pgTable(
     reason: text("reason"),
     keywordsConsidered: integer("keywords_considered").notNull().default(0),
     keywordsCovered: integer("keywords_covered").notNull().default(0),
+    eligibleKeywords: integer("eligible_keywords").notNull().default(0),
+    excludedKeywords: integer("excluded_keywords").notNull().default(0),
+    exclusionReasons: text("exclusion_reasons"),
+    coverage: real("coverage"),
+    calculatedAt: text("calculated_at"),
     ctrModelVersion: text("ctr_model_version").notNull(),
     createdAt: timestampColumn("created_at").notNull().default(isoNow),
   },
@@ -354,5 +360,52 @@ export const siRankTasks = pgTable(
       table.trackedKeywordId,
       table.collectionWindow,
     ),
+  ],
+);
+
+/**
+ * A measured search volume, kept as history (Postgres mirror of the D1 table).
+ *
+ * NULL volume = the provider did not say. 0 = the provider said zero.
+ */
+export const siKeywordVolumeSnapshots = pgTable(
+  "si_keyword_volume_snapshots",
+  {
+    id: text("id").primaryKey(),
+    trackedKeywordId: text("tracked_keyword_id")
+      .notNull()
+      .references(() => trackedKeywords.id, { onDelete: "cascade" }),
+    keyword: text("keyword").notNull(),
+    locationCode: integer("location_code").notNull(),
+    languageCode: text("language_code").notNull(),
+    searchEngine: text("search_engine").notNull().default("google"),
+    searchVolume: integer("search_volume"),
+    competition: real("competition"),
+    competitionLevel: text("competition_level"),
+    costPerClickMicros: integer("cost_per_click_micros"),
+    keywordDifficulty: integer("keyword_difficulty"),
+    searchIntent: text("search_intent"),
+    provider: text("provider").notNull(),
+    source: text("source", { enum: ["dataforseo", "fixture"] }).notNull(),
+    collectedAt: text("collected_at").notNull(),
+    collectionWindow: text("collection_window").notNull(),
+    snapshotStatus: text("snapshot_status", {
+      enum: ["complete", "partial", "no_data"],
+    })
+      .notNull()
+      .default("complete"),
+    snapshotStatusReason: text("snapshot_status_reason"),
+    jobId: text("job_id"),
+    providerResponseId: text("provider_response_id"),
+    dedupeKey: text("dedupe_key").notNull(),
+    createdAt: timestampColumn("created_at").notNull().default(isoNow),
+  },
+  (table) => [
+    uniqueIndex("si_keyword_volume_dedupe_idx").on(table.dedupeKey),
+    index("si_keyword_volume_keyword_idx").on(
+      table.trackedKeywordId,
+      table.collectedAt,
+    ),
+    index("si_keyword_volume_window_idx").on(table.collectionWindow),
   ],
 );

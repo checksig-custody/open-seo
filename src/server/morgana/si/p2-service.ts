@@ -338,6 +338,11 @@ export async function recalculateShareOfSearch(
       reason: overall.reason,
       keywordsConsidered: overall.keywordsConsidered,
       keywordsCovered: overall.keywordsCovered,
+      eligibleKeywords: overall.eligibleKeywords,
+      excludedKeywords: overall.excludedKeywords,
+      exclusionReasons: JSON.stringify(overall.exclusions),
+      coverage: overall.coverage,
+      calculatedAt: overall.calculatedAt,
       ctrModelVersion: CTR_MODEL_VERSION,
     });
   }
@@ -358,6 +363,11 @@ export async function recalculateShareOfSearch(
         reason: result.reason,
         keywordsConsidered: result.keywordsConsidered,
         keywordsCovered: result.keywordsCovered,
+        eligibleKeywords: result.eligibleKeywords,
+        excludedKeywords: result.excludedKeywords,
+        exclusionReasons: JSON.stringify(result.exclusions),
+        coverage: result.coverage,
+        calculatedAt: result.calculatedAt,
         ctrModelVersion: CTR_MODEL_VERSION,
       });
     }

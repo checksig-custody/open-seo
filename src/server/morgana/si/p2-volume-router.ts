@@ -1,0 +1,70 @@
+import { envelope, json, num, readJson } from "./http";
+import * as keywordVolumes from "./keyword-volume-service";
+import * as keywordVolumeStore from "./keyword-volume-store";
+import type { SiRequestContext } from "./router";
+
+/**
+ * Morgana Search Intelligence — the keyword-volume surface.
+ *
+ * MORGANA LOCAL PATCH (see UPSTREAM.md, patch P12).
+ *
+ * Split from `p2-router.ts` for size, and the split falls in a sensible place:
+ * one route spends money to measure volumes, the other reads what was measured.
+ */
+export async function dispatchKeywordVolume(
+  ctx: SiRequestContext,
+): Promise<Response | null> {
+  const { route, request, config, env, providerStatus } = ctx;
+  const method = request.method;
+
+  // Collect the search volumes the whole of phase 2 weights by. A paid provider
+  // call, so it answers to the same pre-flight as buying a ranking.
+  if (route === "keyword-volume-refresh" && method === "POST") {
+    const body = await readJson(request);
+    const ids = Array.isArray(body.tracked_keyword_ids)
+      ? body.tracked_keyword_ids.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : undefined;
+    const result = await keywordVolumes.refreshKeywordVolumes(config, env, {
+      providerStatus,
+      limit: num(body.limit) ?? 50,
+      trackedKeywordIds: ids,
+    });
+    return json(envelope(config, result, { providerStatus }));
+  }
+
+  // What was measured, when, and whether the provider actually answered.
+  if (route === "keyword-volumes" && method === "GET") {
+    const rows = await keywordVolumeStore.latestVolumeSnapshots(100);
+    return json(
+      envelope(
+        config,
+        {
+          snapshots: rows.map((row) => ({
+            tracked_keyword_id: row.trackedKeywordId,
+            keyword: row.keyword,
+            location_code: row.locationCode,
+            language_code: row.languageCode,
+            search_engine: row.searchEngine,
+            search_volume: row.searchVolume,
+            competition: row.competition,
+            competition_level: row.competitionLevel,
+            cost_per_click_micros: row.costPerClickMicros,
+            keyword_difficulty: row.keywordDifficulty,
+            search_intent: row.searchIntent,
+            provider: row.provider,
+            source: row.source,
+            collected_at: row.collectedAt,
+            collection_window: row.collectionWindow,
+            snapshot_status: row.snapshotStatus,
+            snapshot_status_reason: row.snapshotStatusReason,
+          })),
+        },
+        { providerStatus },
+      ),
+    );
+  }
+
+  return null;
+}

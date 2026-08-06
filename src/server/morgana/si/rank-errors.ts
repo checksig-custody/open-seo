@@ -153,7 +153,9 @@ export function failureLine(failure: TypedFailure): string {
 
 /** Log a failure with no provider text in it. */
 export function logRankFailure(
-  context: { trackedKeywordId: string; taskId: string | null },
+  // A batch operation (keyword volumes) has no single keyword to blame, so the
+  // id is nullable rather than faked with an empty string.
+  context: { trackedKeywordId: string | null; taskId: string | null },
   failure: TypedFailure,
 ): void {
   console.error(

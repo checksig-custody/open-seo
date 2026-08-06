@@ -14,6 +14,7 @@ import * as sqliteTelemetry from "./telemetry.schema";
 // MORGANA LOCAL PATCH (UPSTREAM.md, patch P6).
 import * as sqliteSearchIntelligence from "./search-intelligence.schema";
 import * as sqliteSearchIntelligenceP2 from "./search-intelligence-p2.schema";
+import * as sqliteSearchIntelligenceVolume from "./search-intelligence-volume.schema";
 import * as sqliteSearchIntelligenceP3 from "./search-intelligence-p3.schema";
 import * as sqliteSearchIntelligenceP4 from "./search-intelligence-p4.schema";
 import * as sqliteSearchIntelligenceP5 from "./search-intelligence-p5.schema";
@@ -155,6 +156,7 @@ const sqliteAppTables = tablesFrom(
   sqliteTelemetry,
   sqliteSearchIntelligence,
   sqliteSearchIntelligenceP2,
+  sqliteSearchIntelligenceVolume,
   sqliteSearchIntelligenceP3,
   sqliteSearchIntelligenceP4,
   sqliteSearchIntelligenceP5,
