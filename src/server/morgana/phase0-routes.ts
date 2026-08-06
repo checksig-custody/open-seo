@@ -32,8 +32,20 @@ export const PHASE0_PATHS = new Set([
   "/internal/status",
 ]);
 
-const STAGING_MARKER = "Morgana Search Intelligence — STAGING";
 const SERVICE_NAME = "morgana-search-intelligence";
+
+/**
+ * The banner on `/internal/status`, derived from the environment rather than
+ * hardcoded.
+ *
+ * It used to read STAGING unconditionally, which was harmless while staging was
+ * the only deployment. It stops being harmless the moment a production engine
+ * exists: a human reading a status payload to decide whether something is safe
+ * to touch must not be told "STAGING" by a production Worker.
+ */
+function marker(config: Phase0Config): string {
+  return `Morgana Search Intelligence — ${config.SEARCH_INTELLIGENCE_ENVIRONMENT.toUpperCase()}`;
+}
 
 /** Show enough of an id to correlate, never enough to identify a resource. */
 function idPrefix(value: string | undefined): string {
@@ -215,7 +227,7 @@ async function handleReadyz(
       status: ready ? "ready" : "not_ready",
       service: SERVICE_NAME,
       environment: config.SEARCH_INTELLIGENCE_ENVIRONMENT,
-      marker: STAGING_MARKER,
+      marker: marker(config),
       checks,
     },
     ready ? 200 : 503,
@@ -229,7 +241,7 @@ function handleStatus(config: Phase0Config, env: object): Response {
   return jsonResponse({
     service: SERVICE_NAME,
     environment: config.SEARCH_INTELLIGENCE_ENVIRONMENT,
-    marker: STAGING_MARKER,
+    marker: marker(config),
     status: ledger.unexpected_spend_detected ? "critical" : "ok",
     api_version: config.SEARCH_INTELLIGENCE_API_VERSION,
     engine_version: config.ENGINE_UPSTREAM_RELEASE,

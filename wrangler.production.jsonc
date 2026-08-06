@@ -1,0 +1,187 @@
+/**
+ * Morgana Search Intelligence Engine — PRODUCTION.
+ *
+ * MORGANA LOCAL PATCH (see UPSTREAM.md, patch P1). Hand-authored for the same
+ * reason the staging config is: Alchemy is pinned to a prerelease, keeps its own
+ * state store, and auto-provisions Cloudflare Access. On an account that also
+ * holds Morgana production, an IaC tool that can adopt existing resources is the
+ * wrong risk to take.
+ *
+ * Build and deploy:
+ *   node scripts/assert-isolation.mjs wrangler.production.jsonc
+ *   WRANGLER_CONFIG_PATH=wrangler.production.jsonc pnpm exec vite build
+ *   node scripts/assert-isolation.mjs dist/server/wrangler.json
+ *   wrangler deploy -c dist/server/wrangler.json
+ *
+ * SECURITY POSTURE — read before changing anything here.
+ *
+ * This Worker has NO PUBLIC INGRESS, and that is not a phase-0 leftover: it is
+ * the permanent design. `workers_dev` and `preview_urls` are both false and no
+ * route is declared, so it is unreachable from the internet and callable only
+ * over Morgana's Service Binding. Morgana is the only client, it sits behind
+ * Cloudflare Access + Google SSO, and it is where authorisation is decided.
+ * Publishing this Worker would expose an unauthenticated SEO application with a
+ * crawler in it. Do not.
+ *
+ * `scripts/assert-isolation.mjs` enforces every invariant below and must pass
+ * before any migration or deploy.
+ *
+ * WHAT DIFFERS FROM STAGING, and why:
+ *   - its own D1, KV and R2, so a staging mistake cannot touch production data;
+ *   - `SEARCH_INTELLIGENCE_ENVIRONMENT=production`, which drives the status
+ *     marker — a production Worker must never report itself as STAGING;
+ *   - `SEARCH_INTELLIGENCE_STAGING_ENABLED=false`.
+ *
+ * WHAT IS DELIBERATELY IDENTICAL: every spend and load switch ships OFF. The
+ * initial production deploy makes the surface exist and nothing else. Paid
+ * calls, the crawl scheduler, both alert channels and the live AI provider are
+ * each turned on by a human, in that order, after the credential exists and the
+ * first real bootstrap has been read.
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "morgana-search-intelligence",
+  "main": "src/server.ts",
+  "compatibility_date": "2025-09-02",
+  // `global_fetch_strictly_public` blocks Worker fetches to private, loopback
+  // and link-local addresses. It is a second, platform-level layer under the
+  // crawler's own SSRF boundary in `net-guard.ts` — belt and braces, because
+  // the crawler is the one component that fetches URLs it did not author.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+
+  // No public ingress. See the security note above.
+  "workers_dev": false,
+  "preview_urls": false,
+
+  "observability": {
+    "enabled": true,
+    // Spans bill as observability events. Off until there is a reason to pay.
+    "traces": {
+      "enabled": false,
+    },
+  },
+
+  // NO CRON, in production too. Upstream ships `*/15 * * * *`, which runs
+  // billable scheduled rank checks. The engine must never decide on its own to
+  // spend money: Morgana's existing `*/20` cron drives every refresh over the
+  // Service Binding, placed last in its handler so a finite subrequest budget is
+  // never consumed by SEO before brand collection has had it. Two independent
+  // controls on the same risk — no trigger here, and `src/server.ts` refuses a
+  // scheduled run while SEARCH_INTELLIGENCE_ENABLED is false.
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "morgana-search-intelligence",
+      "database_id": "66feb540-1b96-4a4c-8b6d-9ae5429678e4",
+      "migrations_dir": "drizzle",
+    },
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "c41a454ad0a3429abd472dac360c5a85",
+    },
+    // Upstream's OAuth store. The engine has no public ingress and no OAuth
+    // flow, so this is declared only because the module expects the binding.
+    {
+      "binding": "OAUTH_KV",
+      "id": "c41a454ad0a3429abd472dac360c5a85",
+    },
+  ],
+
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "morgana-search-intelligence",
+    },
+  ],
+
+  // Durable Objects and Workflows are declared because the Worker's module
+  // exports them — omitting a declared class breaks the upload. Nothing starts
+  // them: the agent routes sit behind an auth check that fails closed.
+  "durable_objects": {
+    "bindings": [
+      { "name": "ONBOARDING_CHAT", "class_name": "OnboardingChatAgent" },
+      { "name": "SAM_CHAT", "class_name": "SamChatAgent" },
+    ],
+  },
+  // SQLite-backed DO classes must keep their upstream migration tags. Dropping
+  // or renumbering these orphans the DO storage.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["OnboardingChatAgent"] },
+    { "tag": "v2", "new_sqlite_classes": ["SamChatAgent"] },
+  ],
+  "workflows": [
+    {
+      "name": "site-audit-workflow-si",
+      "binding": "SITE_AUDIT_WORKFLOW",
+      "class_name": "SiteAuditWorkflow",
+    },
+    {
+      "name": "rank-check-workflow-si",
+      "binding": "RANK_CHECK_WORKFLOW",
+      "class_name": "RankCheckWorkflow",
+    },
+  ],
+
+  "vars": {
+    // Fail closed. `cloudflare_access` with TEAM_DOMAIN and POLICY_AUD both
+    // UNSET means every application route rejects, because there is no issuer
+    // or audience to verify a JWT against. The engine's own UI must not be
+    // usable; only the `/internal/si/*` surface Morgana calls is.
+    //
+    // `local_noauth` must never be set here — it injects an admin user.
+    "AUTH_MODE": "cloudflare_access",
+    "DATABASE_PROVIDER": "d1",
+
+    // Upstream self-host telemetry is ON by default and posts an install
+    // heartbeat to a hardcoded PostHog project. Both opt-outs are set.
+    "OPENSEO_TELEMETRY_DISABLED": "1",
+    "DO_NOT_TRACK": "1",
+    "VITE_SHOW_DEVTOOLS": "false",
+
+    // The feature surfaces are ON: this is the production engine and its job is
+    // to answer. None of them can spend while PAID_CALLS is off — without a
+    // credential the collector resolves to fixtures stamped source="fixture",
+    // which Morgana refuses to render as production data.
+    "SEARCH_INTELLIGENCE_ENABLED": "true",
+    "SEARCH_INTELLIGENCE_STAGING_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_UI_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_MCP_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_AI_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED": "true",
+    "SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED": "true",
+
+    // --- the four switches a human turns on, in this order -------------------
+    //
+    // 1. PAID_CALLS — authorises spending at all. Requires the caps below to be
+    //    non-zero first; `phase0-env.ts` refuses to boot otherwise, so one flag
+    //    can never by itself authorise spend.
+    // 2. SITE_AUDIT_SCHEDULER — places load on a web server without anybody
+    //    asking. Outward-facing, so it is never a side effect of anything else.
+    // 3. the two ALERT flags — reach a human.
+    // 4. AI_VISIBILITY_LIVE_PROVIDER — the only phase-5 switch that can spend.
+    "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED": "false",
+
+    // Hard-zero until the first real bootstrap has been measured. The product
+    // budget is 10 USD/month total; the split between daily and monthly is set
+    // from observed per-call cost, not guessed, and it is raised deliberately.
+    "SEO_DATAFORSEO_DAILY_COST_CAP_USD": "0",
+    "SEO_DATAFORSEO_MONTHLY_COST_CAP_USD": "0",
+
+    "SEARCH_INTELLIGENCE_ENVIRONMENT": "production",
+    "SEARCH_INTELLIGENCE_API_VERSION": "2026-08-05",
+
+    // Provenance, surfaced by /internal/status so the deployed artifact can be
+    // tied to an upstream release without trusting a build log.
+    "ENGINE_UPSTREAM_REPOSITORY": "https://github.com/every-app/open-seo",
+    "ENGINE_UPSTREAM_RELEASE": "v0.1.3",
+    "ENGINE_UPSTREAM_COMMIT": "9d19e439905a9a954ccdefe22d9270d7c389695d",
+  },
+}
