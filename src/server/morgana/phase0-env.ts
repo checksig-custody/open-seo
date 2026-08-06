@@ -34,6 +34,16 @@ export const phase0EnvSchema = z
     SEARCH_INTELLIGENCE_MCP_ENABLED: boolFlag.default("false"),
     SEARCH_INTELLIGENCE_AI_ENABLED: boolFlag.default("false"),
     SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED: boolFlag.default("false"),
+    // Phase 5. The scheduler is separate from the feature because a crawler
+    // that runs on its own is a different commitment from one an operator
+    // starts by hand, and the live AI provider is separate again because it is
+    // the only phase-5 flag that could ever cost money.
+    SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED: boolFlag.default("false"),
+    SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED: boolFlag.default("false"),
+    SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED: boolFlag.default("false"),
+    SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED: boolFlag.default("false"),
+    SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED:
+      boolFlag.default("false"),
     // Defaults are the transformed output (integer micro-USD), because Zod 4
     // applies `.default()` after the pipe. Zero is the fail-safe value: an
     // absent cap must mean "cannot spend", never "unlimited".
@@ -80,6 +90,50 @@ export const phase0EnvSchema = z
         });
       }
     }
+    // Phase 5: a dependent flag must not be able to switch on the thing it
+    // depends on. The scheduler and the alerts are inert without the feature,
+    // and letting the config say otherwise would make the flag list a lie.
+    for (const dependent of [
+      "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED",
+      "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED",
+    ] as const) {
+      if (
+        cfg[dependent] === "true" &&
+        cfg.SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED === "false"
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          message: `${dependent}=true requires SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED=true`,
+        });
+      }
+    }
+    for (const dependent of [
+      "SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED",
+      "SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED",
+    ] as const) {
+      if (
+        cfg[dependent] === "true" &&
+        cfg.SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED === "false"
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          message: `${dependent}=true requires SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED=true`,
+        });
+      }
+    }
+    // The live AI provider is the one phase-5 switch that can spend, so it
+    // carries the same precondition every paid capability does.
+    if (
+      cfg.SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED === "true" &&
+      cfg.SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED === "false"
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED=true requires " +
+          "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED=true",
+      });
+    }
     // A daily cap above the monthly cap is always a configuration error.
     if (
       cfg.SEO_DATAFORSEO_MONTHLY_COST_CAP_USD > 0 &&
@@ -105,6 +159,11 @@ const PHASE0_ENV_KEYS = [
   "SEARCH_INTELLIGENCE_MCP_ENABLED",
   "SEARCH_INTELLIGENCE_AI_ENABLED",
   "SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED",
+  "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED",
+  "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED",
+  "SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED",
+  "SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED",
+  "SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED",
   "SEO_DATAFORSEO_DAILY_COST_CAP_USD",
   "SEO_DATAFORSEO_MONTHLY_COST_CAP_USD",
   "SEARCH_INTELLIGENCE_ENVIRONMENT",

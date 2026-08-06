@@ -11,6 +11,11 @@ import {
 import { dispatchPhase2 } from "./p2-router";
 import { dispatchPhase3 } from "./backlink-router";
 import { dispatchPhase4 } from "./p4-router";
+import { dispatchSiteAudit, dispatchSiteAuditOperations } from "./p5-router";
+import {
+  dispatchAiVisibility,
+  dispatchAiVisibilityOperations,
+} from "./p5-ai-router";
 import {
   badRequest,
   envelope,
@@ -74,6 +79,17 @@ async function dispatchReads(ctx: SiRequestContext): Promise<Response | null> {
           rank_tracking: false,
           backlink_details: false,
           site_audit: isEnabled(config.SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED),
+          site_audit_scheduler: isEnabled(
+            config.SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED,
+          ),
+          ai_visibility: isEnabled(
+            config.SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED,
+          ),
+          // Explicitly false rather than absent, so a reader can tell "off"
+          // from "this build does not know about it".
+          ai_visibility_live_provider: isEnabled(
+            config.SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED,
+          ),
           mcp: isEnabled(config.SEARCH_INTELLIGENCE_MCP_ENABLED),
           ai: isEnabled(config.SEARCH_INTELLIGENCE_AI_ENABLED),
         },
@@ -372,6 +388,10 @@ export async function dispatch(ctx: SiRequestContext): Promise<Response> {
     (await dispatchPhase2(ctx)) ??
     (await dispatchPhase3(ctx)) ??
     (await dispatchPhase4(ctx)) ??
+    (await dispatchSiteAudit(ctx)) ??
+    (await dispatchSiteAuditOperations(ctx)) ??
+    (await dispatchAiVisibility(ctx)) ??
+    (await dispatchAiVisibilityOperations(ctx)) ??
     json({ error: "not found" }, 404)
   );
 }

@@ -12,6 +12,8 @@ import * as sqliteSearchIntelligence from "./search-intelligence.schema";
 import * as sqliteSearchIntelligenceP2 from "./search-intelligence-p2.schema";
 import * as sqliteSearchIntelligenceP3 from "./search-intelligence-p3.schema";
 import * as sqliteSearchIntelligenceP4 from "./search-intelligence-p4.schema";
+import * as sqliteSearchIntelligenceP5 from "./search-intelligence-p5.schema";
+import * as sqliteSearchIntelligenceP5Ai from "./search-intelligence-p5-ai.schema";
 import * as pgApp from "./pg/app.schema";
 import * as pgAudit from "./pg/audit.schema";
 import * as pgSam from "./pg/sam.schema";
@@ -24,6 +26,8 @@ import * as pgSearchIntelligence from "./pg/search-intelligence.schema";
 import * as pgSearchIntelligenceP2 from "./pg/search-intelligence-p2.schema";
 import * as pgSearchIntelligenceP3 from "./pg/search-intelligence-p3.schema";
 import * as pgSearchIntelligenceP4 from "./pg/search-intelligence-p4.schema";
+import * as pgSearchIntelligenceP5 from "./pg/search-intelligence-p5.schema";
+import * as pgSearchIntelligenceP5Ai from "./pg/search-intelligence-p5-ai.schema";
 
 // Canonical schema barrel. Repositories import their tables from here and the
 // provider-aware `db` from "@/db", so each repository is written ONCE for both
@@ -46,7 +50,9 @@ type AppSchema = typeof sqliteApp &
   typeof sqliteSearchIntelligence &
   typeof sqliteSearchIntelligenceP2 &
   typeof sqliteSearchIntelligenceP3 &
-  typeof sqliteSearchIntelligenceP4;
+  typeof sqliteSearchIntelligenceP4 &
+  typeof sqliteSearchIntelligenceP5 &
+  typeof sqliteSearchIntelligenceP5Ai;
 
 const runtimeSchema =
   getDatabaseProvider() === "postgres"
@@ -63,6 +69,8 @@ const runtimeSchema =
         ...pgSearchIntelligenceP2,
         ...pgSearchIntelligenceP3,
         ...pgSearchIntelligenceP4,
+        ...pgSearchIntelligenceP5,
+        ...pgSearchIntelligenceP5Ai,
       }
     : {
         ...sqliteApp,
@@ -77,6 +85,8 @@ const runtimeSchema =
         ...sqliteSearchIntelligenceP2,
         ...sqliteSearchIntelligenceP3,
         ...sqliteSearchIntelligenceP4,
+        ...sqliteSearchIntelligenceP5,
+        ...sqliteSearchIntelligenceP5Ai,
       };
 
 // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- guarded by schema-parity.test.ts
@@ -149,4 +159,16 @@ export const {
   siReputationFindings,
   siTimelineEvents,
   siCorrelationCheckpoints,
+  // MORGANA LOCAL PATCH (UPSTREAM.md, patch P10).
+  siSiteAuditRuns,
+  siSiteAuditFrontier,
+  siSiteAuditPages,
+  siSiteAuditLinks,
+  siSiteAuditIssues,
+  siSiteAuditIssueEvents,
+  siSiteAuditUsageLedger,
+  siAiVisibilityQueries,
+  siAiVisibilitySnapshots,
+  siAiVisibilityCitations,
+  siAiVisibilityEvents,
 } = schema;

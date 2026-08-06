@@ -34,7 +34,13 @@ export type NodeType =
   | "telegram_channel"
   | "social_profile"
   | "campaign"
-  | "finding";
+  | "finding"
+  // Phase 5. Additive: a new subject kind is one enum value, which is what the
+  // phase-4 note meant by the graph being the substrate later phases build on.
+  | "audit_page"
+  | "audit_issue"
+  | "ai_query"
+  | "cited_domain";
 
 export type EdgeType =
   | "MENTIONS"
@@ -46,7 +52,12 @@ export type EdgeType =
   | "IMPERSONATES"
   | "ASSOCIATED_WITH"
   | "PART_OF_CAMPAIGN"
-  | "TRIGGERED_FINDING";
+  | "TRIGGERED_FINDING"
+  // Phase 5.
+  | "HAS_AUDIT_ISSUE"
+  | "CITES"
+  | "MENTIONS_IN_AI_RESULT"
+  | "REFERENCES_PAGE";
 
 export type SourceSystem = "morgana" | "search_intelligence" | "derived";
 

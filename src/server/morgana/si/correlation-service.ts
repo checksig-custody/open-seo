@@ -14,6 +14,7 @@ import {
   projectTimeline,
 } from "./correlation-momentum";
 import * as ingest from "./graph-ingest";
+import * as ingestP5 from "./graph-ingest-p5";
 import * as entityStore from "./store";
 import { detectCampaign, type Signal } from "./correlation";
 
@@ -70,6 +71,12 @@ export async function runCorrelationTick(
     ingest.ingestSearchData,
     ingest.ingestBacklinkData,
     ingest.ingestFindings,
+    // Phase 5. Appended rather than interleaved: audit and AI data are the
+    // cheapest sources to ingest and the least urgent, so they run last and a
+    // partial pass simply resumes on the next tick.
+    ingestP5.ingestAuditData,
+    ingestP5.ingestAuditIssues,
+    ingestP5.ingestAiVisibility,
   ]) {
     const result = await step();
     ingested.push(result);

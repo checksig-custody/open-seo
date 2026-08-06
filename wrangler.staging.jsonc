@@ -153,7 +153,26 @@
     "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "false",
     "SEARCH_INTELLIGENCE_MCP_ENABLED": "false",
     "SEARCH_INTELLIGENCE_AI_ENABLED": "false",
-    "SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED": "false",
+
+    // Phase 5. Site Audit is ON in staging for the same reason phase 1 turned
+    // `search_intelligence` on: it is the feature under construction, and it
+    // calls no paid provider at all — the crawler talks only to the configured
+    // entity's own domain, through the SSRF boundary in `net-guard.ts`.
+    //
+    // The SCHEDULER stays off. The feature flag decides whether the surface
+    // exists; the scheduler flag decides whether we place load on a real web
+    // server without anyone asking, and only a human turns that on.
+    //
+    // AI Visibility is on, its LIVE PROVIDER is not: that is the only phase-5
+    // flag that can ever cost money, and with it off the collector resolves to
+    // deterministic fixtures stamped source="fixture". Env validation refuses
+    // it anyway while paid calls are off and both caps are zero.
+    "SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED": "true",
+    "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED": "true",
+    "SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED": "false",
 
     // Hard-zero spend. `src/server/morgana/phase0-env.ts` refuses to boot if
     // paid calls are ever enabled while either cap is zero, so flipping one

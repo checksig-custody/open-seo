@@ -16,6 +16,8 @@ import * as sqliteSearchIntelligence from "./search-intelligence.schema";
 import * as sqliteSearchIntelligenceP2 from "./search-intelligence-p2.schema";
 import * as sqliteSearchIntelligenceP3 from "./search-intelligence-p3.schema";
 import * as sqliteSearchIntelligenceP4 from "./search-intelligence-p4.schema";
+import * as sqliteSearchIntelligenceP5 from "./search-intelligence-p5.schema";
+import * as sqliteSearchIntelligenceP5Ai from "./search-intelligence-p5-ai.schema";
 import * as pgApp from "./pg/app.schema";
 import * as pgSam from "./pg/sam.schema";
 import * as pgAuth from "./pg/better-auth-schema";
@@ -27,6 +29,8 @@ import * as pgSearchIntelligence from "./pg/search-intelligence.schema";
 import * as pgSearchIntelligenceP2 from "./pg/search-intelligence-p2.schema";
 import * as pgSearchIntelligenceP3 from "./pg/search-intelligence-p3.schema";
 import * as pgSearchIntelligenceP4 from "./pg/search-intelligence-p4.schema";
+import * as pgSearchIntelligenceP5 from "./pg/search-intelligence-p5.schema";
+import * as pgSearchIntelligenceP5Ai from "./pg/search-intelligence-p5-ai.schema";
 
 // Guards the ONE structural artifact `db:generate` does not regenerate: the
 // hand-written Postgres schema. The provider-aware `db`/`@/db/schema` barrel
@@ -153,6 +157,8 @@ const sqliteAppTables = tablesFrom(
   sqliteSearchIntelligenceP2,
   sqliteSearchIntelligenceP3,
   sqliteSearchIntelligenceP4,
+  sqliteSearchIntelligenceP5,
+  sqliteSearchIntelligenceP5Ai,
 );
 const pgAppTables = tablesFrom(
   pgApp,
@@ -165,6 +171,8 @@ const pgAppTables = tablesFrom(
   pgSearchIntelligenceP2,
   pgSearchIntelligenceP3,
   pgSearchIntelligenceP4,
+  pgSearchIntelligenceP5,
+  pgSearchIntelligenceP5Ai,
 );
 const sqliteAuthTables = tablesFrom(sqliteAuth);
 const pgAuthTables = tablesFrom(pgAuth);
