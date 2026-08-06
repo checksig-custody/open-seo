@@ -330,7 +330,9 @@ export async function phase2CostStatus(
   const monthlyCap = config.SEO_DATAFORSEO_MONTHLY_COST_CAP_USD;
 
   return {
-    costCentre: "dataforseo_search_intelligence",
+    // Distinct from phase 1 on purpose: "what is rank tracking costing us"
+    // must be answerable without subtracting one ledger from another.
+    costCentre: "dataforseo_search_intelligence_p2",
     providerStatus: resolveProviderStatus(config, env),
     httpRequests: monthTotals.httpRequests,
     meteredRequests: monthTotals.meteredRequests,
