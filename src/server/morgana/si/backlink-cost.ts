@@ -5,6 +5,7 @@ import { newId, nowIso } from "./ids";
 import type { Phase0Config } from "../phase0-env";
 import { resolveProviderStatus } from "./service";
 import { WORST_CASE_BACKLINK_MICROS } from "./backlink-live-collector";
+import { authorizePaidOperation } from "./budget-authority";
 
 /**
  * Morgana Search Intelligence — phase 3 usage ledger and cost status.
@@ -233,49 +234,38 @@ export async function backlinkCostStatus(
  */
 export async function backlinkBudgetAllows(
   config: Phase0Config,
-  options: { reservedForOtherPhasesUsd?: number; now?: Date } = {},
-): Promise<{ allowed: boolean; reason: string | null }> {
+  options: {
+    reservedForOtherPhasesUsd?: number;
+    now?: Date;
+    /** Identifies the operation, so a retry cannot reserve capacity twice. */
+    idempotencyKey?: string;
+    entityId?: string | null;
+  } = {},
+): Promise<{
+  allowed: boolean;
+  reason: string | null;
+  reservationId?: string;
+}> {
   const now = options.now ?? new Date();
-  const monthlyCap = config.SEO_DATAFORSEO_MONTHLY_COST_CAP_USD;
-  const dailyCap = config.SEO_DATAFORSEO_DAILY_COST_CAP_USD;
-  if (monthlyCap === 0 || dailyCap === 0) {
-    return {
-      allowed: false,
-      reason: "cost caps are zero; paid collection is disabled",
-    };
+
+  // THE ONE AUTHORITY. This function used to read `si_backlink_usage_ledger`
+  // and compare it against the shared cap — a correct answer to the wrong
+  // question, which is how a 0.0792 USD collection was allowed while the day
+  // had already spent 0.13476 elsewhere. It now asks the authority that sees
+  // every ledger, and holds capacity rather than merely looking at it.
+  const decision = await authorizePaidOperation(config, {
+    collector: "backlinks",
+    operationType: "backlink_collection",
+    worstCaseMicros: WORST_CASE_BACKLINK_MICROS,
+    idempotencyKey:
+      options.idempotencyKey ??
+      `backlinks|${options.entityId ?? "unknown"}|${now.toISOString().slice(0, 13)}`,
+    providerConfigured: resolveProviderStatus(config, {}) !== "not_configured",
+    now,
+  });
+
+  if (!decision.allowed) {
+    return { allowed: false, reason: `${decision.code}: ${decision.reason}` };
   }
-  const [monthly, daily] = await Promise.all([
-    totals({ month: now.toISOString().slice(0, 7) }),
-    totals({ day: now.toISOString().slice(0, 10) }),
-  ]);
-  const reserved = options.reservedForOtherPhasesUsd ?? 0;
-  if (monthly.actualCostMicros / MICROS >= Math.max(0, monthlyCap - reserved)) {
-    return { allowed: false, reason: "monthly backlink allowance exhausted" };
-  }
-  if (daily.actualCostMicros / MICROS >= dailyCap) {
-    return { allowed: false, reason: "daily cost cap reached" };
-  }
-  // HEADROOM, NOT JUST "NOT YET AT THE CAP". A collection that starts with
-  // 0.001 USD of room left will still spend what it spends: the provider states
-  // its charge only in the response. So the question asked here is whether the
-  // WORST case still fits — the same rule the SERP and keyword-volume
-  // pre-flights apply, with this subsystem's own ceiling rather than a number
-  // copied from a differently priced endpoint.
-  const worstCaseUsd = WORST_CASE_BACKLINK_MICROS / MICROS;
-  if (daily.actualCostMicros / MICROS + worstCaseUsd > dailyCap) {
-    return {
-      allowed: false,
-      reason: "the worst case of this collection would exceed the daily cap",
-    };
-  }
-  if (
-    monthly.actualCostMicros / MICROS + worstCaseUsd >
-    Math.max(0, monthlyCap - reserved)
-  ) {
-    return {
-      allowed: false,
-      reason: "the worst case of this collection would exceed the monthly cap",
-    };
-  }
-  return { allowed: true, reason: null };
+  return { allowed: true, reason: null, reservationId: decision.reservationId };
 }

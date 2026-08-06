@@ -7,7 +7,7 @@ import * as p2 from "./p2-store";
 import * as p2an from "./p2-analytics-store";
 import * as p2jobs from "./p2-jobs-store";
 import * as store from "./store";
-import * as ledger from "./ledger-store";
+import { globalSpend } from "./budget-authority";
 import { resolveProviderStatus } from "./service";
 import { submitDueRankTask } from "./rank-live-service";
 import { collectReadyRankTasks } from "./rank-collect-service";
@@ -192,10 +192,10 @@ export async function runRankTick(
       // Spend is re-read from the ledger for each submission rather than once
       // per tick: every submission moves the daily total, and a cap checked
       // only at the top of a loop is a cap the loop walks straight past.
-      const [dayTotals, monthTotals] = await Promise.all([
-        ledger.ledgerTotals(date),
-        ledger.ledgerTotals(date.slice(0, 7)),
-      ]);
+      // GLOBAL, not this ledger's. Reading only phase 2's spend is exactly the
+      // mistake that let the day reach 0.21400 USD against a 0.20 cap: four
+      // guards each gave a correct local answer and nobody held the total.
+      const global = await globalSpend(config, { now });
       const outcome = await submitDueRankTask({
         config,
         providerStatus: provider,
@@ -208,8 +208,10 @@ export async function runRankTick(
         },
         jobId: job.id,
         day: date,
-        dailySpentMicros: dayTotals.actualCostMicros,
-        monthlySpentMicros: monthTotals.actualCostMicros,
+        dailySpentMicros:
+          global.dailyActualMicros + global.openReservationsMicros,
+        monthlySpentMicros:
+          global.monthlyActualMicros + global.openReservationsMicros,
         now,
       });
       if (outcome.status === "submitted") submitted += 1;

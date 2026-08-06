@@ -1,5 +1,6 @@
 import { isEnabled, type Phase0Config } from "../phase0-env";
 import { checkBudget } from "./budget";
+import { globalSpend } from "./budget-authority";
 import { fixtureKeywords, fixtureOverview, fixturePages } from "./fixtures";
 import { runLiveDomainRefresh } from "./refresh-live";
 import {
@@ -250,15 +251,16 @@ export async function refreshEntity(
   // circuit breaker, which is genuinely its own state and not derivable from
   // usage.
   const budgetState = await ledger.readBudgetState(month);
-  const [monthTotals, dayTotals] = await Promise.all([
-    ledger.ledgerTotals(month),
-    ledger.ledgerTotals(snapshotDate),
-  ]);
+  // GLOBAL spend, not phase 1's own. Every collector weighing only its own
+  // ledger against a shared cap is what let the day reach 0.21400 USD against
+  // 0.20 — four correct local answers adding up to a wrong global one.
+  const global = await globalSpend(config, { now });
   const decision = checkBudget(
     limitsFrom(config),
     {
-      dailyCostMicros: dayTotals.actualCostMicros,
-      monthlyCostMicros: monthTotals.actualCostMicros,
+      dailyCostMicros: global.dailyActualMicros + global.openReservationsMicros,
+      monthlyCostMicros:
+        global.monthlyActualMicros + global.openReservationsMicros,
       consecutiveFailures: budgetState.consecutiveFailures,
       circuitOpenedAt: budgetState.circuitOpenedAt,
     },

@@ -1,6 +1,7 @@
 import { type Phase0Config } from "../phase0-env";
 import { type CollectionAccounting } from "./collection-accounting";
 import * as ledger from "./ledger-store";
+import { globalSpend } from "./budget-authority";
 import * as p2 from "./p2-store";
 import {
   collectKeywordVolumes,
@@ -93,17 +94,16 @@ export async function refreshKeywordVolumes(
   const now = options.now ?? new Date();
   const window = now.toISOString().slice(0, 10);
 
-  const [dayTotals, monthTotals] = await Promise.all([
-    ledger.ledgerTotals(window),
-    ledger.ledgerTotals(window.slice(0, 7)),
-  ]);
+  // The whole subsystem's spend, not this collector's.
+  const global = await globalSpend(config, { now });
   const status = options.providerStatus;
   const preflight = rankPreflight({
     config,
     providerStatus:
       status === "live" || status === "fixture" ? status : "not_configured",
-    dailySpentMicros: dayTotals.actualCostMicros,
-    monthlySpentMicros: monthTotals.actualCostMicros,
+    dailySpentMicros: global.dailyActualMicros + global.openReservationsMicros,
+    monthlySpentMicros:
+      global.monthlyActualMicros + global.openReservationsMicros,
     worstCaseCostMicros: WORST_CASE_OVERVIEW_MICROS,
   });
   if (!preflight.ok) {

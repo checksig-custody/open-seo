@@ -4,6 +4,7 @@ import {
   backlinkPersistenceFailure,
   logBacklinkFailure,
 } from "./backlink-errors";
+import { commitReservation, releaseReservation } from "./budget-authority";
 import {
   backlinkDedupeKey,
   normalizeAnchor,
@@ -126,6 +127,7 @@ export async function refreshBacklinks(
           now,
         })
       : { allowed: true, reason: null };
+  const reservationId = budget.reservationId ?? null;
   if (!budget.allowed) {
     return emptyResult(
       entityId,
@@ -164,6 +166,29 @@ export async function refreshBacklinks(
       options.budgetExhausted === true || collected.truncatedReason !== null,
     noBaseline: previousSnapshot === undefined,
   });
+
+  // THE RESERVATION IS CLOSED EITHER WAY, and how it closes is the point.
+  //
+  // A provider that answered is charged, so the reservation commits for what it
+  // actually cost — including when that exceeds the estimate, which is how the
+  // Backlinks overrun (79 236 µUSD against 25 000) becomes visible instead of
+  // being truncated. A provider that failed without cost gives its capacity
+  // back. A cost nobody reported keeps holding capacity, because the call may
+  // still have been charged.
+  if (reservationId) {
+    if (collected.providerOk || collected.actualCostMicros > 0) {
+      await commitReservation(reservationId, {
+        actualCostMicros:
+          collected.costStatus === "not_reported"
+            ? null
+            : collected.actualCostMicros,
+        costStatus: collected.costStatus ?? "reported",
+        now,
+      });
+    } else {
+      await releaseReservation(reservationId, "PROVIDER_FAILED_NO_COST", now);
+    }
+  }
 
   if (!collected.providerOk) {
     // A live failure explains itself once, sanitized, at the boundary that knew

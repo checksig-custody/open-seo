@@ -39,6 +39,20 @@ vi.mock("./store", () => ({
   listEntities,
 }));
 vi.mock("./job-store", () => ({ claimJob, finishJob }));
+vi.mock("./budget-authority", () => ({
+  globalSpend: vi.fn(() =>
+    Promise.resolve({
+      dailyActualMicros: 0,
+      monthlyActualMicros: 0,
+      openReservationsMicros: 0,
+    }),
+  ),
+  authorizePaidOperation: vi.fn(() =>
+    Promise.resolve({ allowed: true, reservationId: "br_test" }),
+  ),
+  commitReservation: vi.fn(),
+  releaseReservation: vi.fn(),
+}));
 vi.mock("./ledger-store", () => ({
   recordUsage,
   ledgerTotals,

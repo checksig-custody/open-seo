@@ -169,6 +169,13 @@
       "when": 1786006200500,
       "tag": "0023_backlink_live",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786009800500,
+      "tag": "0024_global_budget",
+      "breakpoints": true
     }
   ]
 }

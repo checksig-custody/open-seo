@@ -24,6 +24,20 @@ const updateKeywordVolume = vi.fn();
 vi.mock("@/server/lib/dataforseo/client", () => ({
   loadDataforseoSections: () => Promise.resolve({ fetchKeywordOverview }),
 }));
+vi.mock("./budget-authority", () => ({
+  globalSpend: vi.fn(() =>
+    Promise.resolve({
+      dailyActualMicros: 0,
+      monthlyActualMicros: 0,
+      openReservationsMicros: 0,
+    }),
+  ),
+  authorizePaidOperation: vi.fn(() =>
+    Promise.resolve({ allowed: true, reservationId: "br_test" }),
+  ),
+  commitReservation: vi.fn(),
+  releaseReservation: vi.fn(),
+}));
 vi.mock("./ledger-store", () => ({ recordUsage, ledgerTotals }));
 vi.mock("./p2-store", () => ({ listTrackedKeywords }));
 vi.mock("./keyword-volume-store", () => ({
@@ -36,6 +50,7 @@ vi.mock("./keyword-volume-store", () => ({
 const { collectKeywordVolumes, normalizeOverviewItem } =
   await import("./keyword-volume-collector");
 const { refreshKeywordVolumes } = await import("./keyword-volume-service");
+const { globalSpend } = await import("./budget-authority");
 const { readPhase0Config } = await import("../phase0-env");
 
 const KEYWORD = {
@@ -291,8 +306,14 @@ describe("the refresh, end to end", () => {
 
   it("refuses when the worst case would not fit inside the daily cap", async () => {
     // 0.19 spent of a 0.20 cap: one more request could not fit, and a cap
-    // respected on average is not a cap.
-    ledgerTotals.mockResolvedValue({ actualCostMicros: 190_000 });
+    // respected on average is not a cap. The figure now comes from the GLOBAL
+    // authority — the sum of every ledger — rather than from this collector's
+    // own, which is the whole point of the guard.
+    vi.mocked(globalSpend).mockResolvedValue({
+      dailyActualMicros: 190_000,
+      monthlyActualMicros: 190_000,
+      openReservationsMicros: 0,
+    } as unknown as Awaited<ReturnType<typeof globalSpend>>);
     const result = await run(liveEnv);
     expect(result.status).toBe("refused");
     expect(result.reason).toContain("daily_budget_insufficient");

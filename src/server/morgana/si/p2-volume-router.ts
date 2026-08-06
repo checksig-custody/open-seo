@@ -1,6 +1,7 @@
 import { envelope, json, num, readJson } from "./http";
 import * as keywordVolumes from "./keyword-volume-service";
 import * as p2service from "./p2-service";
+import { expireStaleReservations, globalSpend } from "./budget-authority";
 import * as keywordVolumeStore from "./keyword-volume-store";
 import type { SiRequestContext } from "./router";
 
@@ -59,6 +60,15 @@ export async function dispatchKeywordVolume(
     const keywords = await keywordVolumeStore.trackedKeywordIds();
     const result = await p2service.recomputeAfterVolumeChange(config, keywords);
     return json(envelope(config, result, { providerStatus }));
+  }
+
+  // The whole subsystem's budget, in one place. Free: it reads persisted rows
+  // and reconciles reservations whose process died — which are NOT released,
+  // because we cannot know whether the provider charged for them.
+  if (route === "budget" && method === "GET") {
+    const reconciled = await expireStaleReservations();
+    const spend = await globalSpend(config);
+    return json(envelope(config, { ...spend, reconciled }, { providerStatus }));
   }
 
   // What was measured, when, and whether the provider actually answered.
