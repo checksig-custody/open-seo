@@ -120,6 +120,23 @@ function capabilities(config: Phase0Config) {
     mcp: isEnabled(config.SEARCH_INTELLIGENCE_MCP_ENABLED),
     ai: isEnabled(config.SEARCH_INTELLIGENCE_AI_ENABLED),
     site_audit: isEnabled(config.SEARCH_INTELLIGENCE_SITE_AUDIT_ENABLED),
+    // Phase 5. Reported separately from `site_audit` because they are not the
+    // same decision: the feature flag says the surface exists, the scheduler
+    // says we crawl someone's server without being asked, and the live provider
+    // is the only phase-5 switch that can spend money.
+    site_audit_scheduler: isEnabled(
+      config.SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED,
+    ),
+    site_audit_alerts: isEnabled(
+      config.SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED,
+    ),
+    ai_visibility: isEnabled(config.SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED),
+    ai_visibility_alerts: isEnabled(
+      config.SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED,
+    ),
+    ai_visibility_live_provider: isEnabled(
+      config.SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED,
+    ),
     // Phase 0 exposes no SEO capability at all; these are named so the Phase-1
     // reader sees an explicit false rather than an absent key.
     domain_overview: false,
