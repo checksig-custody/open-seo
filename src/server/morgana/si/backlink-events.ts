@@ -1,9 +1,7 @@
-import { routeRisk, type RiskResult } from "./backlink-risk";
 import { buildBacklinkGap } from "./backlink-diff";
 import * as store from "./backlink-store";
 import * as findingsStore from "./backlink-findings-store";
 import * as entityStore from "./store";
-import type { BrandProtectionSignals } from "./brand-protection";
 
 /**
  * Morgana Search Intelligence — phase 3 event construction and gap recompute.
@@ -18,89 +16,6 @@ import type { BrandProtectionSignals } from "./brand-protection";
 
 function today(now = new Date()): string {
   return now.toISOString().slice(0, 10);
-}
-
-/**
- * Turn diffs and risk into events.
- *
- * The dedupe key carries the day and the subject domain, so a domain that adds
- * forty links produces one event, and produces it once — the UNIQUE constraint
- * is the cooldown rather than a timer we would have to get right.
- */
-export function buildEvents(input: {
-  entityId: string;
-  day: string;
-  added: readonly { key: string; domain: string }[];
-  removed: readonly { key: string; domain: string }[];
-  riskByDomain: ReadonlyMap<string, RiskResult>;
-  brandSignalsByDomain: ReadonlyMap<string, BrandProtectionSignals>;
-}): findingsStore.BacklinkEventInput[] {
-  const events: findingsStore.BacklinkEventInput[] = [];
-  const seenDomains = new Set<string>();
-
-  for (const item of input.added) {
-    if (seenDomains.has(item.domain)) continue;
-    seenDomains.add(item.domain);
-    const risk = input.riskByDomain.get(item.domain);
-    const brandProtection = input.brandSignalsByDomain.get(item.domain);
-    const channel = risk ? routeRisk(risk) : "intel";
-
-    if (
-      risk &&
-      (risk.classification === "suspicious" ||
-        risk.classification === "high_risk")
-    ) {
-      events.push({
-        eventType: risk.reasons.some(
-          (reason) =>
-            reason.component === "lookalike_domain" ||
-            reason.component === "brand_in_domain",
-        )
-          ? "possible_impersonation"
-          : "suspicious_link",
-        entityId: input.entityId,
-        subjectDomain: item.domain,
-        severity: risk.classification === "high_risk" ? "critical" : "warning",
-        channel: channel === "none" ? "none" : channel,
-        riskScore: risk.score,
-        riskClassification: risk.classification,
-        reasons: risk.reasons,
-        brandProtectionSignals: brandProtection?.hasSignals
-          ? brandProtection.counts
-          : null,
-        brandProtectionStatus: brandProtection?.status ?? "no_known_signal",
-        dedupeKey: `finding|${input.entityId}|${item.domain}|${input.day}`,
-      });
-      continue;
-    }
-
-    events.push({
-      eventType: "referring_domain_gained",
-      entityId: input.entityId,
-      subjectDomain: item.domain,
-      severity: "info",
-      channel: "intel",
-      riskScore: risk?.score ?? null,
-      riskClassification: risk?.classification ?? null,
-      dedupeKey: `gained|${input.entityId}|${item.domain}|${input.day}`,
-    });
-  }
-
-  const lostDomains = new Set<string>();
-  for (const item of input.removed) {
-    if (lostDomains.has(item.domain)) continue;
-    lostDomains.add(item.domain);
-    events.push({
-      eventType: "backlink_lost",
-      entityId: input.entityId,
-      subjectDomain: item.domain,
-      severity: "notice",
-      channel: "intel",
-      dedupeKey: `lost|${input.entityId}|${item.domain}|${input.day}`,
-    });
-  }
-
-  return events;
 }
 
 /**
