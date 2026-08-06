@@ -10,6 +10,7 @@ import * as sqliteTelemetry from "./telemetry.schema";
 // MORGANA LOCAL PATCH (UPSTREAM.md, patch P6).
 import * as sqliteSearchIntelligence from "./search-intelligence.schema";
 import * as sqliteSearchIntelligenceP2 from "./search-intelligence-p2.schema";
+import * as sqliteSearchIntelligenceP3 from "./search-intelligence-p3.schema";
 import * as pgApp from "./pg/app.schema";
 import * as pgAudit from "./pg/audit.schema";
 import * as pgSam from "./pg/sam.schema";
@@ -20,6 +21,7 @@ import * as pgReddit from "./pg/reddit-attribution.schema";
 import * as pgTelemetry from "./pg/telemetry.schema";
 import * as pgSearchIntelligence from "./pg/search-intelligence.schema";
 import * as pgSearchIntelligenceP2 from "./pg/search-intelligence-p2.schema";
+import * as pgSearchIntelligenceP3 from "./pg/search-intelligence-p3.schema";
 
 // Canonical schema barrel. Repositories import their tables from here and the
 // provider-aware `db` from "@/db", so each repository is written ONCE for both
@@ -40,7 +42,8 @@ type AppSchema = typeof sqliteApp &
   typeof sqliteReddit &
   typeof sqliteTelemetry &
   typeof sqliteSearchIntelligence &
-  typeof sqliteSearchIntelligenceP2;
+  typeof sqliteSearchIntelligenceP2 &
+  typeof sqliteSearchIntelligenceP3;
 
 const runtimeSchema =
   getDatabaseProvider() === "postgres"
@@ -55,6 +58,7 @@ const runtimeSchema =
         ...pgTelemetry,
         ...pgSearchIntelligence,
         ...pgSearchIntelligenceP2,
+        ...pgSearchIntelligenceP3,
       }
     : {
         ...sqliteApp,
@@ -67,6 +71,7 @@ const runtimeSchema =
         ...sqliteTelemetry,
         ...sqliteSearchIntelligence,
         ...sqliteSearchIntelligenceP2,
+        ...sqliteSearchIntelligenceP3,
       };
 
 // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- guarded by schema-parity.test.ts
@@ -121,4 +126,13 @@ export const {
   rankingEvents,
   rankingJobs,
   phase2UsageLedger,
+  // MORGANA LOCAL PATCH (UPSTREAM.md, patch P8).
+  siBacklinks,
+  siBacklinkSnapshots,
+  siReferringDomains,
+  siAnchorSnapshots,
+  siBacklinkEvents,
+  siBacklinkUsageLedger,
+  siBacklinkJobs,
+  siBacklinkGapSnapshots,
 } = schema;
