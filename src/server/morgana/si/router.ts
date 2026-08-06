@@ -9,6 +9,7 @@ import {
   projectPage,
 } from "./projections";
 import { dispatchPhase2 } from "./p2-router";
+import { dispatchPhase3 } from "./backlink-router";
 import {
   badRequest,
   envelope,
@@ -368,6 +369,7 @@ export async function dispatch(ctx: SiRequestContext): Promise<Response> {
     (await dispatchReads(ctx)) ??
     (await dispatchOperations(ctx)) ??
     (await dispatchPhase2(ctx)) ??
+    (await dispatchPhase3(ctx)) ??
     json({ error: "not found" }, 404)
   );
 }
