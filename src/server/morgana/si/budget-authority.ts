@@ -4,7 +4,6 @@ import { db } from "@/db";
 import { searchUsageLedger } from "@/db/search-intelligence.schema";
 import { phase2UsageLedger } from "@/db/search-intelligence-p2.schema";
 import { siBacklinkUsageLedger } from "@/db/search-intelligence-p3.schema";
-import { siSiteAuditUsageLedger } from "@/db/search-intelligence-p5.schema";
 import { siBudgetReservations } from "@/db/search-intelligence-budget.schema";
 import { isEnabled, type Phase0Config } from "../phase0-env";
 import { newId } from "./ids";
@@ -57,37 +56,31 @@ import { newId } from "./ids";
 const LEDGERS = [
   {
     name: "domain_overview",
-    read: (period: string) =>
-      sumLedger(
-        searchUsageLedger as unknown as Parameters<typeof sumLedger>[0],
-        period,
-      ),
+    read: (period: string) => sumLedger(searchUsageLedger, period),
   },
   {
     name: "phase2",
-    read: (period: string) =>
-      sumLedger(
-        phase2UsageLedger as unknown as Parameters<typeof sumLedger>[0],
-        period,
-      ),
+    read: (period: string) => sumLedger(phase2UsageLedger, period),
   },
   {
     name: "backlinks",
-    read: (period: string) =>
-      sumLedger(
-        siBacklinkUsageLedger as unknown as Parameters<typeof sumLedger>[0],
-        period,
-      ),
-  },
-  {
-    name: "site_audit",
-    read: (period: string) =>
-      sumLedger(
-        siSiteAuditUsageLedger as unknown as Parameters<typeof sumLedger>[0],
-        period,
-      ),
+    read: (period: string) => sumLedger(siBacklinkUsageLedger, period),
   },
 ] as const;
+
+/**
+ * SITE AUDIT IS DELIBERATELY ABSENT, and this is not an oversight.
+ *
+ * `si_site_audit_usage_ledger` has no cost columns at all — it measures
+ * requests, bytes, pages and blocks, because Site Audit crawls first-party
+ * pages and buys nothing from any provider. Summing it would mean inventing a
+ * money column for a subsystem that spends none.
+ *
+ * It was in this list for one deploy, behind a type assertion that silenced the
+ * very check that would have caught it, and `SUM(actual_cost_micros)` over a
+ * table without that column throws. If Site Audit ever gains a paid provider,
+ * it gains a cost column first and this list gains a line — in that order.
+ */
 
 /** One ledger's totals over a day (`YYYY-MM-DD`) or a month (`YYYY-MM`). */
 async function sumLedger(
