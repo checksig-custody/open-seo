@@ -1,7 +1,6 @@
 import { and, desc, eq, gte } from "drizzle-orm";
 import { db } from "@/db";
 import {
-  domainRefreshJobs,
   domainSnapshotKeywords,
   domainSnapshotPages,
   domainSnapshots,
@@ -10,6 +9,7 @@ import {
 import { normalizeEntityDomain, normalizePageUrl } from "./domains";
 import type { SnapshotPoint } from "./metrics";
 import { newId, nowIso } from "./ids";
+import { chunkForD1 } from "./d1-chunk";
 
 /**
  * Morgana Search Intelligence — persistence.
@@ -185,11 +185,15 @@ interface PersistSnapshotInput {
   providerRequestId?: string | null;
   estimatedCostMicros: number;
   actualCostMicros: number;
+  /** Set only by a forced refresh; see the dedupe branch in persistSnapshot. */
+  replaceExisting?: boolean;
 }
 
 interface PersistSnapshotResult {
   snapshotId: string;
   created: boolean;
+  /** True when a forced refresh overwrote the day existing snapshot. */
+  replaced?: boolean;
 }
 
 /** `entity|location|language|date` — the natural key for one day's snapshot. */
@@ -225,7 +229,18 @@ export async function persistSnapshot(
     .where(eq(domainSnapshots.dedupeKey, dedupeKey))
     .limit(1);
   if (existing[0]) {
-    return { snapshotId: existing[0].id, created: false };
+    // A forced refresh has ALREADY PAID for a fresh collection. Returning the
+    // stale row here would throw that result away and bill for nothing, which
+    // is exactly what happened on the first forced run: the provider was called
+    // and charged, and the snapshot on screen stayed the old one.
+    //
+    // Anything other than a forced refresh keeps the original behaviour — the
+    // UNIQUE key is what makes a duplicated tick free rather than billable.
+    if (!input.replaceExisting) {
+      return { snapshotId: existing[0].id, created: false };
+    }
+    await replaceSnapshot(existing[0].id, input);
+    return { snapshotId: existing[0].id, created: false, replaced: true };
   }
 
   const snapshotId = newId("ds");
@@ -262,45 +277,114 @@ export async function persistSnapshot(
     throw error;
   }
 
-  if (input.keywords.length > 0) {
-    await db.insert(domainSnapshotKeywords).values(
-      input.keywords.map((kw, index) => ({
-        id: newId("dk"),
-        snapshotId,
-        keyword: kw.keyword.slice(0, 500),
-        rankGroup: kw.rankGroup,
-        rankAbsolute: kw.rankAbsolute,
-        searchVolume: kw.searchVolume,
-        estimatedTraffic: kw.estimatedTraffic,
-        cpc: kw.cpc,
-        keywordDifficulty: kw.keywordDifficulty,
-        searchIntent: kw.searchIntent,
-        rankingUrl: kw.rankingUrl?.slice(0, 2000) ?? null,
-        serpUpdatedAt: kw.serpUpdatedAt ?? null,
-        position: index + 1,
-      })),
-    );
-  }
-
-  if (input.pages.length > 0) {
-    await db.insert(domainSnapshotPages).values(
-      input.pages.map((page, index) => ({
-        id: newId("dp"),
-        snapshotId,
-        url: page.url.slice(0, 2000),
-        normalizedUrl: normalizePageUrl(page.url).slice(0, 2000),
-        estimatedTraffic: page.estimatedTraffic,
-        keywordCount: page.keywordCount,
-        topKeyword: page.topKeyword?.slice(0, 500) ?? null,
-        topKeywordPosition: page.topKeywordPosition,
-        pageTitle: page.pageTitle?.slice(0, 500) ?? null,
-        lastSeenAt: page.lastSeenAt ?? timestamp,
-        position: index + 1,
-      })),
-    );
-  }
+  await insertSnapshotKeywords(snapshotId, input.keywords);
+  await insertSnapshotPages(snapshotId, input.pages, timestamp);
 
   return { snapshotId, created: true };
+}
+
+/**
+ * Snapshot children, written in statement-sized batches.
+ *
+ * 13 columns per keyword row against D1's 100-parameter ceiling, so a single
+ * insert of the 100 keywords this collector asks for would bind 1300 and be
+ * refused. Exactly the defect the phase-5 frontier hit; `chunkForD1` derives
+ * the batch from the column count so it cannot drift when a column is added.
+ */
+async function insertSnapshotKeywords(
+  snapshotId: string,
+  keywords: readonly KeywordRow[],
+): Promise<void> {
+  let position = 0;
+  for (const chunk of chunkForD1(keywords, 13)) {
+    await db.insert(domainSnapshotKeywords).values(
+      chunk.map((kw) => {
+        position += 1;
+        return {
+          id: newId("dk"),
+          snapshotId,
+          keyword: kw.keyword.slice(0, 500),
+          rankGroup: kw.rankGroup,
+          rankAbsolute: kw.rankAbsolute,
+          searchVolume: kw.searchVolume,
+          estimatedTraffic: kw.estimatedTraffic,
+          cpc: kw.cpc,
+          keywordDifficulty: kw.keywordDifficulty,
+          searchIntent: kw.searchIntent,
+          rankingUrl: kw.rankingUrl?.slice(0, 2000) ?? null,
+          serpUpdatedAt: kw.serpUpdatedAt ?? null,
+          position,
+        };
+      }),
+    );
+  }
+}
+
+/** 11 columns per row; same reasoning as the keywords above. */
+async function insertSnapshotPages(
+  snapshotId: string,
+  pages: readonly PageRow[],
+  timestamp: string,
+): Promise<void> {
+  let position = 0;
+  for (const chunk of chunkForD1(pages, 11)) {
+    await db.insert(domainSnapshotPages).values(
+      chunk.map((page) => {
+        position += 1;
+        return {
+          id: newId("dp"),
+          snapshotId,
+          url: page.url.slice(0, 2000),
+          normalizedUrl: normalizePageUrl(page.url).slice(0, 2000),
+          estimatedTraffic: page.estimatedTraffic,
+          keywordCount: page.keywordCount,
+          topKeyword: page.topKeyword?.slice(0, 500) ?? null,
+          topKeywordPosition: page.topKeywordPosition,
+          pageTitle: page.pageTitle?.slice(0, 500) ?? null,
+          lastSeenAt: page.lastSeenAt ?? timestamp,
+          position,
+        };
+      }),
+    );
+  }
+}
+
+/**
+ * Overwrite an existing snapshot with a freshly collected one.
+ *
+ * Only ever reached from a FORCED refresh, which has already paid for the
+ * collection. The children are deleted and rewritten rather than merged: a
+ * merge would leave yesterday's keywords sitting beside today's with no way to
+ * tell them apart.
+ */
+async function replaceSnapshot(
+  snapshotId: string,
+  input: PersistSnapshotInput,
+): Promise<void> {
+  const timestamp = nowIso();
+  await db
+    .update(domainSnapshots)
+    .set({
+      organicTrafficEstimate: input.metrics.organicTrafficEstimate,
+      organicKeywordCount: input.metrics.organicKeywordCount,
+      backlinkCount: input.metrics.backlinkCount,
+      referringDomainCount: input.metrics.referringDomainCount,
+      rankSignal: input.metrics.rankSignal,
+      source: input.source,
+      providerRequestId: input.providerRequestId ?? null,
+      fetchedAt: timestamp,
+      estimatedCostMicros: input.estimatedCostMicros,
+      actualCostMicros: input.actualCostMicros,
+    })
+    .where(eq(domainSnapshots.id, snapshotId));
+  await db
+    .delete(domainSnapshotKeywords)
+    .where(eq(domainSnapshotKeywords.snapshotId, snapshotId));
+  await db
+    .delete(domainSnapshotPages)
+    .where(eq(domainSnapshotPages.snapshotId, snapshotId));
+  await insertSnapshotKeywords(snapshotId, input.keywords);
+  await insertSnapshotPages(snapshotId, input.pages, timestamp);
 }
 
 export async function latestSnapshot(entityId: string) {
@@ -351,101 +435,5 @@ export async function snapshotPages(snapshotId: string, limit = 100) {
     .from(domainSnapshotPages)
     .where(eq(domainSnapshotPages.snapshotId, snapshotId))
     .orderBy(domainSnapshotPages.position)
-    .limit(limit);
-}
-
-// --- refresh jobs -----------------------------------------------------------
-
-type JobStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
-
-function jobDedupeKey(
-  entityId: string,
-  snapshotDate: string,
-  trigger: "scheduled" | "manual",
-): string {
-  return `${entityId}|${snapshotDate}|${trigger}`;
-}
-
-/**
- * Claim a refresh job. Returns null when an equivalent job already exists —
- * which is the dedup: the UNIQUE index on `dedupe_key` means a duplicated
- * scheduler tick, a double-clicked manual refresh and a retry all collapse onto
- * one job instead of one billable call each.
- */
-export async function claimJob(input: {
-  entityId: string;
-  snapshotDate: string;
-  trigger: "scheduled" | "manual";
-  requestedBy?: string | null;
-}): Promise<{ id: string } | null> {
-  const id = newId("rj");
-  try {
-    await db.insert(domainRefreshJobs).values({
-      id,
-      entityId: input.entityId,
-      status: "running",
-      trigger: input.trigger,
-      requestedBy: input.requestedBy ?? null,
-      dedupeKey: jobDedupeKey(
-        input.entityId,
-        input.snapshotDate,
-        input.trigger,
-      ),
-      attempts: 1,
-      lastError: null,
-      skipReason: null,
-      estimatedCostMicros: 0,
-      actualCostMicros: 0,
-      snapshotId: null,
-      createdAt: nowIso(),
-      startedAt: nowIso(),
-      finishedAt: null,
-    });
-    return { id };
-  } catch {
-    return null;
-  }
-}
-
-export async function finishJob(
-  id: string,
-  patch: {
-    status: JobStatus;
-    snapshotId?: string | null;
-    lastError?: string | null;
-    skipReason?: string | null;
-    estimatedCostMicros?: number;
-    actualCostMicros?: number;
-  },
-): Promise<void> {
-  await db
-    .update(domainRefreshJobs)
-    .set({
-      status: patch.status,
-      snapshotId: patch.snapshotId ?? null,
-      // Sanitised by the caller; never a stack trace or a credential.
-      lastError: patch.lastError?.slice(0, 500) ?? null,
-      skipReason: patch.skipReason ?? null,
-      estimatedCostMicros: patch.estimatedCostMicros ?? 0,
-      actualCostMicros: patch.actualCostMicros ?? 0,
-      finishedAt: nowIso(),
-    })
-    .where(eq(domainRefreshJobs.id, id));
-}
-
-export async function getJob(id: string) {
-  const rows = await db
-    .select()
-    .from(domainRefreshJobs)
-    .where(eq(domainRefreshJobs.id, id))
-    .limit(1);
-  return rows[0] ?? null;
-}
-
-export async function recentJobs(limit = 50) {
-  return db
-    .select()
-    .from(domainRefreshJobs)
-    .orderBy(desc(domainRefreshJobs.createdAt))
     .limit(limit);
 }

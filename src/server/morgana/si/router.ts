@@ -2,6 +2,7 @@ import { isEnabled, type Phase0Config } from "../phase0-env";
 import * as service from "./service";
 import { costStatus } from "./cost";
 import * as store from "./store";
+import * as jobStore from "./job-store";
 import {
   projectDeltas,
   projectEntity,
@@ -328,19 +329,25 @@ async function dispatchOperations(
       entityId,
       trigger,
       requestedBy: str(body.requested_by) ?? null,
+      // `force` was accepted by the service and never forwarded, which made the
+      // documented recovery path a no-op: after a failed or partial collection
+      // the day's snapshot already exists, so every retry returned
+      // `snapshot_already_current` without re-collecting. Re-collecting costs
+      // money, so it stays explicit — but it has to be reachable.
+      force: bool(body.force) ?? false,
     });
     return json(envelope(config, { job: outcome }, { providerStatus }));
   }
 
   const jobMatch = /^jobs\/([A-Za-z0-9_-]{1,64})$/.exec(route);
   if (jobMatch?.[1] && method === "GET") {
-    const job = await store.getJob(jobMatch[1]);
+    const job = await jobStore.getJob(jobMatch[1]);
     if (!job) return json({ error: "job not found" }, 404);
     return json(envelope(config, { job }, { providerStatus }));
   }
 
   if (route === "jobs" && method === "GET") {
-    const jobs = await store.recentJobs(
+    const jobs = await jobStore.recentJobs(
       clamp(url.searchParams.get("limit"), 50, 200) ?? 50,
     );
     return json(envelope(config, { jobs }, { providerStatus }));

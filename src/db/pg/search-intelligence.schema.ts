@@ -203,6 +203,12 @@ export const searchUsageLedger = pgTable(
     retryRequests: integer("retry_requests").notNull().default(0),
     estimatedCostMicros: integer("estimated_cost_micros").notNull().default(0),
     actualCostMicros: integer("actual_cost_micros").notNull().default(0),
+    costReportedRequests: integer("cost_reported_requests")
+      .notNull()
+      .default(0),
+    costNotReportedRequests: integer("cost_not_reported_requests")
+      .notNull()
+      .default(0),
     cacheHits: integer("cache_hits").notNull().default(0),
     cacheMisses: integer("cache_misses").notNull().default(0),
     blockedByBudget: integer("blocked_by_budget").notNull().default(0),

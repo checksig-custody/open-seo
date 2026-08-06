@@ -280,6 +280,25 @@ export const searchUsageLedger = sqliteTable(
     estimatedCostMicros: integer("estimated_cost_micros").notNull().default(0),
     /** Taken from the provider response, not guessed. */
     actualCostMicros: integer("actual_cost_micros").notNull().default(0),
+    /**
+     * How many of these requests came back with a cost the provider stated,
+     * and how many did not.
+     *
+     * Without this pair, `actual_cost_micros = 0` is ambiguous: it reads the
+     * same whether DataForSEO said "this was free" or said nothing at all. The
+     * first is a measurement; the second is a gap, and a budget that cannot
+     * tell them apart will under-report spend and never know it.
+     *
+     * Counters rather than a status column because this row is an aggregate —
+     * one row per day/endpoint/class, accumulated by upsert — so a single enum
+     * would have to pick a winner across calls that disagreed.
+     */
+    costReportedRequests: integer("cost_reported_requests")
+      .notNull()
+      .default(0),
+    costNotReportedRequests: integer("cost_not_reported_requests")
+      .notNull()
+      .default(0),
     cacheHits: integer("cache_hits").notNull().default(0),
     cacheMisses: integer("cache_misses").notNull().default(0),
     blockedByBudget: integer("blocked_by_budget").notNull().default(0),

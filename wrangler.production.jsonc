@@ -163,18 +163,21 @@
     //    asking. Outward-facing, so it is never a side effect of anything else.
     // 3. the two ALERT flags — reach a human.
     // 4. AI_VISIBILITY_LIVE_PROVIDER — the only phase-5 switch that can spend.
-    // OFF again after the calibration attempt of 2026-08-06.
     //
-    // The credential is present and the engine reports `dataforseo: configured`,
-    // but no live collector exists to use it: phases 1, 2 and 3 each ship an
-    // explicit refusal stub (`live_collection_not_enabled`, and a backlink
-    // provider that returns `providerOk: false`), and the Search Intelligence
-    // context imports nothing from `src/server/lib/dataforseo/`. Enabling paid
-    // calls therefore grants spend authority that nothing can exercise, and an
-    // authority nobody needs should not be left switched on.
+    // PAID_CALLS is ON, bounded by the caps below (0.20/day, 2.00/month) which
+    // `assert-isolation.mjs` refuses to deploy without.
     //
-    // Turn this back on in the same commit that wires the first real collector.
-    "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "false",
+    // It was switched off at the end of the 2026-08-06 verification because two
+    // collections had failed and neither could be explained: the only record was
+    // a job row reading `provider_error` with `last_error = NULL`, written by a
+    // catch that covers the provider calls AND the persistence after them. The
+    // reason was therefore a guess, not evidence.
+    //
+    // What changed is that a failure now describes itself — origin, endpoint,
+    // error class and typed code, all sanitised — and a production engine
+    // refuses to write a fixture at all. Spend is authorised again because the
+    // next failure is diagnosable, which the last one was not.
+    "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "true",
     "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED": "false",
     "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED": "false",
     "SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED": "false",

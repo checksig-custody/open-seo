@@ -1,6 +1,7 @@
 import { isEnabled, type Phase0Config } from "../phase0-env";
 import { checkBudget } from "./budget";
 import { fixtureKeywords, fixtureOverview, fixturePages } from "./fixtures";
+import { runLiveDomainRefresh } from "./refresh-live";
 import {
   computeDeltas,
   computeVisibilityShare,
@@ -8,9 +9,12 @@ import {
   type VisibilityShareOutcome,
 } from "./metrics";
 import * as store from "./store";
+import * as jobs from "./job-store";
 import * as ledger from "./ledger-store";
 import type { SnapshotKeywordRow, SnapshotPageRow } from "./store";
-import { getEnvValueSync } from "@/server/lib/runtime-env";
+import { resolveProviderStatus } from "./provider-status";
+
+export { resolveProviderStatus } from "./provider-status";
 
 /**
  * Morgana Search Intelligence — orchestration.
@@ -57,32 +61,6 @@ function limitsFrom(config: Phase0Config) {
     paidCallsEnabled: isEnabled(config.SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED),
     circuitBreakerThreshold: 5,
   };
-}
-
-function credentialPresent(env: object): boolean {
-  const value =
-    // getEnvValueSync reads an interface-typed env without an assertion and
-    // applies the Morgana credential alias, so there is nothing to cast.
-    getEnvValueSync(env, "DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY") ??
-    getEnvValueSync(env, "DATAFORSEO_API_KEY");
-  return typeof value === "string" && value.trim() !== "";
-}
-
-/**
- * Which data source a refresh would use right now.
- *
- * `fixture` is only ever chosen when paid calls are OFF. The engine must never
- * silently serve synthetic numbers in a configuration where an operator has
- * asked for real ones — a fixture mistaken for a measurement is worse than an
- * outage.
- */
-export function resolveProviderStatus(
-  config: Phase0Config,
-  env: object,
-): ProviderStatus {
-  const paidCalls = isEnabled(config.SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED);
-  if (!paidCalls) return credentialPresent(env) ? "not_configured" : "fixture";
-  return credentialPresent(env) ? "live" : "not_configured";
 }
 
 /**
@@ -149,11 +127,12 @@ export async function refreshEntity(
     };
   }
 
-  const job = await store.claimJob({
+  const job = await jobs.claimJob({
     entityId: entity.id,
     snapshotDate,
     trigger: input.trigger,
     requestedBy: input.requestedBy ?? null,
+    force: input.force ?? false,
   });
   if (!job) {
     return {
@@ -167,6 +146,36 @@ export async function refreshEntity(
   }
 
   const providerStatus = resolveProviderStatus(config, env);
+
+  // A PRODUCTION ENGINE NEVER MANUFACTURES A FIXTURE.
+  //
+  // Morgana's client already refuses fixture payloads in production, but that
+  // guard protects the READER: by the time it fires, a synthetic row has been
+  // written to the production database, where it outlives the request and is
+  // indistinguishable from a measurement to anything that reads D1 directly —
+  // a SQL check, an export, a later phase. The write is the damage, so it is
+  // refused at the writer too.
+  //
+  // Reached whenever the credential is missing or spend is off in a production
+  // deployment. That is a configuration fault, so it fails loudly as a skipped
+  // job rather than quietly producing plausible numbers.
+  if (
+    providerStatus === "fixture" &&
+    config.SEARCH_INTELLIGENCE_ENVIRONMENT === "production"
+  ) {
+    await jobs.finishJob(job.id, {
+      status: "skipped",
+      skipReason: "fixture_refused_in_production",
+    });
+    return {
+      entityId: entity.id,
+      jobId: job.id,
+      status: "skipped",
+      snapshotId: null,
+      reason: "fixture_refused_in_production",
+      costMicros: 0,
+    };
+  }
 
   // Fixture mode: no provider call, no spend, and the snapshot is stamped
   // `source: "fixture"` so nothing downstream can mistake it for measurement.
@@ -198,7 +207,7 @@ export async function refreshEntity(
       endpointPath: "fixture/domain_overview",
       meteringClass: "cache",
     });
-    await store.finishJob(job.id, {
+    await jobs.finishJob(job.id, {
       status: "succeeded",
       snapshotId: result.snapshotId,
     });
@@ -214,7 +223,7 @@ export async function refreshEntity(
 
   // Any real collection needs both a credential and budget headroom.
   if (providerStatus === "not_configured") {
-    await store.finishJob(job.id, {
+    await jobs.finishJob(job.id, {
       status: "skipped",
       skipReason: "credential_not_configured",
     });
@@ -228,15 +237,27 @@ export async function refreshEntity(
     };
   }
 
+  // SPEND COMES FROM THE LEDGER, not from `search_budget_state`.
+  //
+  // That table has a read path and no write path — a deliberate phase-1 gap,
+  // because nothing could spend yet. Live collection closes that gap, and the
+  // consequence of leaving it open would be a cap that never binds: the guard
+  // would read `monthlyCostMicros: 0` forever, however much had been spent.
+  //
+  // Deriving the totals from the ledger rows that recorded the spend is the
+  // fix with no dual write to drift. The state row is still consulted for the
+  // circuit breaker, which is genuinely its own state and not derivable from
+  // usage.
   const budgetState = await ledger.readBudgetState(month);
+  const [monthTotals, dayTotals] = await Promise.all([
+    ledger.ledgerTotals(month),
+    ledger.ledgerTotals(snapshotDate),
+  ]);
   const decision = checkBudget(
     limitsFrom(config),
     {
-      dailyCostMicros:
-        budgetState.currentDay === snapshotDate
-          ? budgetState.dailyCostMicros
-          : 0,
-      monthlyCostMicros: budgetState.monthlyCostMicros,
+      dailyCostMicros: dayTotals.actualCostMicros,
+      monthlyCostMicros: monthTotals.actualCostMicros,
       consecutiveFailures: budgetState.consecutiveFailures,
       circuitOpenedAt: budgetState.circuitOpenedAt,
     },
@@ -250,7 +271,7 @@ export async function refreshEntity(
       meteringClass: "paid_submission",
       blockedByBudget: true,
     });
-    await store.finishJob(job.id, {
+    await jobs.finishJob(job.id, {
       status: "skipped",
       skipReason: decision.reason ?? "budget_blocked",
     });
@@ -264,22 +285,21 @@ export async function refreshEntity(
     };
   }
 
-  // Live collection is deliberately NOT implemented in phase 1: the dedicated
-  // credential does not exist, so this branch is unreachable in every deployed
-  // configuration. Leaving it as an explicit refusal rather than a half-written
-  // provider call means the first person to add a credential gets a clear
-  // failure telling them what to implement, instead of a silent partial result.
-  await store.finishJob(job.id, {
-    status: "skipped",
-    skipReason: "live_collection_not_enabled",
+  const live = await runLiveDomainRefresh({
+    entity,
+    jobId: job.id,
+    snapshotDate,
+    keywordLimit: TOP_KEYWORD_LIMIT,
+    pageLimit: TOP_PAGE_LIMIT,
+    force: input.force ?? false,
   });
   return {
     entityId: entity.id,
     jobId: job.id,
-    status: "skipped",
-    snapshotId: null,
-    reason: "live_collection_not_enabled",
-    costMicros: 0,
+    status: live.status,
+    snapshotId: live.snapshotId,
+    reason: live.reason,
+    costMicros: live.costMicros,
   };
 }
 

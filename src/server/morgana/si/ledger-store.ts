@@ -16,16 +16,41 @@ import { newId, nowIso } from "./ids";
 
 // --- usage ledger and budget state -----------------------------------------
 
+/**
+ * What the provider said about the cost of a call.
+ *
+ * `zero` and `not_reported` are different facts and must stay different: the
+ * first is a measurement ("this endpoint was free"), the second is a gap ("we
+ * never learned"). Collapsing them makes a silent under-report indistinguishable
+ * from a real zero, which is the one way a budget guard can be wrong without
+ * anybody noticing.
+ */
+type CostStatus = "reported" | "zero" | "not_reported";
+
 interface RecordUsageInput {
   day: string;
   entityId?: string | null;
   endpointPath: string;
   meteringClass: MeteringClass;
   estimatedCostMicros?: number;
+  /**
+   * Only meaningful when `costStatus` is `reported` or `zero`. A cost that was
+   * not reported must not arrive here as 0 — pass `costStatus: "not_reported"`
+   * and leave this undefined.
+   */
   actualCostMicros?: number;
+  costStatus?: CostStatus;
   failed?: boolean;
   retry?: boolean;
   blockedByBudget?: boolean;
+}
+
+/** Reject anything that is not a finite, non-negative integer of micro-USD. */
+function safeCostMicros(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return Math.round(value);
 }
 
 /**
@@ -48,8 +73,17 @@ export async function recordUsage(input: RecordUsageInput): Promise<void> {
     meteredRequests: metered,
     failedRequests: input.failed ? 1 : 0,
     retryRequests: input.retry ? 1 : 0,
-    estimatedCostMicros: input.estimatedCostMicros ?? 0,
-    actualCostMicros: input.actualCostMicros ?? 0,
+    estimatedCostMicros: safeCostMicros(input.estimatedCostMicros),
+    // A not-reported cost contributes NOTHING to the money column. It is
+    // counted below instead, so the gap stays visible rather than being
+    // silently rounded into a zero.
+    actualCostMicros:
+      input.costStatus === "not_reported"
+        ? 0
+        : safeCostMicros(input.actualCostMicros),
+    costReportedRequests:
+      input.costStatus === "reported" || input.costStatus === "zero" ? 1 : 0,
+    costNotReportedRequests: input.costStatus === "not_reported" ? 1 : 0,
     cacheHits: isCache ? 1 : 0,
     cacheMisses: isCache ? 0 : 1,
     blockedByBudget: input.blockedByBudget ? 1 : 0,
@@ -71,6 +105,8 @@ export async function recordUsage(input: RecordUsageInput): Promise<void> {
         retryRequests: sql`${searchUsageLedger.retryRequests} + ${values.retryRequests}`,
         estimatedCostMicros: sql`${searchUsageLedger.estimatedCostMicros} + ${values.estimatedCostMicros}`,
         actualCostMicros: sql`${searchUsageLedger.actualCostMicros} + ${values.actualCostMicros}`,
+        costReportedRequests: sql`${searchUsageLedger.costReportedRequests} + ${values.costReportedRequests}`,
+        costNotReportedRequests: sql`${searchUsageLedger.costNotReportedRequests} + ${values.costNotReportedRequests}`,
         cacheHits: sql`${searchUsageLedger.cacheHits} + ${values.cacheHits}`,
         cacheMisses: sql`${searchUsageLedger.cacheMisses} + ${values.cacheMisses}`,
         blockedByBudget: sql`${searchUsageLedger.blockedByBudget} + ${values.blockedByBudget}`,
@@ -158,8 +194,14 @@ export async function readBudgetState(month: string): Promise<BudgetStateRow> {
   );
 }
 
-// NOTE: the budget WRITE path (accruing spend, tripping the breaker, recording an
-// announced alert threshold) is deliberately absent. Nothing can call it: live
-// collection is not implemented in phase 1, so there is no spend to accrue. It
-// belongs with the live collector, and shipping it now would be unreachable code
-// that knip is right to reject. The READ path above is used and tested.
+// NOTE: `search_budget_state` still has no WRITE path for SPEND, and that is now
+// deliberate rather than pending. The live collector records every call in the
+// usage ledger, and `ledgerTotals` derives the day and month spend from those
+// rows, so the budget guard reads the same numbers that were written when the
+// money was spent. A second accrued copy would be a dual write with nothing to
+// reconcile it, and the failure mode of a drifting budget copy is a cap that
+// silently stops binding.
+//
+// The state row survives for the circuit breaker, which is real state: how many
+// consecutive failures have happened, and when the breaker opened. Neither is
+// derivable from usage.
