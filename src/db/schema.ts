@@ -9,6 +9,7 @@ import * as sqliteReddit from "./reddit-attribution.schema";
 import * as sqliteTelemetry from "./telemetry.schema";
 // MORGANA LOCAL PATCH (UPSTREAM.md, patch P6).
 import * as sqliteSearchIntelligence from "./search-intelligence.schema";
+import * as sqliteSearchIntelligenceP2 from "./search-intelligence-p2.schema";
 import * as pgApp from "./pg/app.schema";
 import * as pgAudit from "./pg/audit.schema";
 import * as pgSam from "./pg/sam.schema";
@@ -18,6 +19,7 @@ import * as pgGsc from "./pg/gsc.schema";
 import * as pgReddit from "./pg/reddit-attribution.schema";
 import * as pgTelemetry from "./pg/telemetry.schema";
 import * as pgSearchIntelligence from "./pg/search-intelligence.schema";
+import * as pgSearchIntelligenceP2 from "./pg/search-intelligence-p2.schema";
 
 // Canonical schema barrel. Repositories import their tables from here and the
 // provider-aware `db` from "@/db", so each repository is written ONCE for both
@@ -37,7 +39,8 @@ type AppSchema = typeof sqliteApp &
   typeof sqliteGsc &
   typeof sqliteReddit &
   typeof sqliteTelemetry &
-  typeof sqliteSearchIntelligence;
+  typeof sqliteSearchIntelligence &
+  typeof sqliteSearchIntelligenceP2;
 
 const runtimeSchema =
   getDatabaseProvider() === "postgres"
@@ -51,6 +54,7 @@ const runtimeSchema =
         ...pgReddit,
         ...pgTelemetry,
         ...pgSearchIntelligence,
+        ...pgSearchIntelligenceP2,
       }
     : {
         ...sqliteApp,
@@ -62,6 +66,7 @@ const runtimeSchema =
         ...sqliteReddit,
         ...sqliteTelemetry,
         ...sqliteSearchIntelligence,
+        ...sqliteSearchIntelligenceP2,
       };
 
 // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- guarded by schema-parity.test.ts
@@ -107,4 +112,13 @@ export const {
   domainRefreshJobs,
   searchUsageLedger,
   searchBudgetState,
+  // MORGANA LOCAL PATCH (UPSTREAM.md, patch P7).
+  keywordClusters,
+  trackedKeywords,
+  siRankSnapshots,
+  keywordGapSnapshots,
+  shareOfSearchSnapshots,
+  rankingEvents,
+  rankingJobs,
+  phase2UsageLedger,
 } = schema;
