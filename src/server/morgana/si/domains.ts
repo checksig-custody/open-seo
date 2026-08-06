@@ -209,3 +209,27 @@ export function normalizePageUrl(input: string): string {
   const query = parsed.searchParams.toString();
   return `${parsed.hostname}${path}${query ? `?${query}` : ""}`;
 }
+
+/**
+ * Is this host in scope for the entity?
+ *
+ * The apex and its `www` host are the same site — checksig.com redirects to
+ * www.checksig.com, and its rankings are attributed there. Any OTHER subdomain
+ * is a different property and is excluded unless the entity opted in.
+ *
+ * This exists because the provider has no "apex plus www" option: Labs takes a
+ * single `include_subdomains` boolean. Asking for subdomains and filtering here
+ * is the narrowest way to get www without also collecting blog., app., or
+ * anything else that happens to hang off the domain.
+ */
+export function hostInEntityScope(
+  host: string,
+  registrableDomain: string,
+  includeSubdomains: boolean,
+): boolean {
+  const target = host.trim().toLowerCase().replace(/\.$/, "");
+  const root = registrableDomain.trim().toLowerCase();
+  if (!target || !root) return false;
+  if (target === root || target === `www.${root}`) return true;
+  return includeSubdomains && target.endsWith(`.${root}`);
+}

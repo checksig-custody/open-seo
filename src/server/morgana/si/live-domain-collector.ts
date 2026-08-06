@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { loadDataforseoSections } from "@/server/lib/dataforseo/client";
 import { CollectorCallError } from "./collection-log";
+import { readProviderCost } from "./collection-accounting";
+import { hostInEntityScope } from "./domains";
 
 /**
  * Morgana Search Intelligence — phase 1 live collector.
@@ -101,20 +103,14 @@ interface LiveOverviewResult {
  *
  * Coercing the absence to 0 would have hidden the same problem more quietly, so
  * it stays absent all the way to the ledger, which counts it separately.
+ *
+ * Phase 2 needs exactly the same reading, so the implementation lives in
+ * `collection-accounting` and both collectors share it — two readings of the
+ * same provider field would be two chances to disagree about what was spent.
  */
-interface CallCost {
-  micros: number | null;
-  status: "reported" | "zero" | "not_reported";
-}
+type CallCost = ReturnType<typeof readProviderCost>;
 
-function readCost(billing: { costUsd?: number } | undefined): CallCost {
-  const usd = billing?.costUsd;
-  if (typeof usd !== "number" || !Number.isFinite(usd) || usd < 0) {
-    return { micros: null, status: "not_reported" };
-  }
-  const micros = Math.round(usd * 1_000_000);
-  return { micros, status: micros === 0 ? "zero" : "reported" };
-}
+const readCost = readProviderCost;
 
 /** One provider call, with the endpoint it hit and what it cost. */
 interface CallRecord {
@@ -151,30 +147,6 @@ const ENDPOINT = {
   rankedKeywords: "dataforseo_labs/google/ranked_keywords/live",
   relevantPages: "dataforseo_labs/google/relevant_pages/live",
 } as const;
-
-/**
- * Is this host in scope for the entity?
- *
- * The apex and its `www` host are the same site — checksig.com redirects to
- * www.checksig.com, and its rankings are attributed there. Any OTHER subdomain
- * is a different property and is excluded unless the entity opted in.
- *
- * This exists because the provider has no "apex plus www" option: Labs takes a
- * single `include_subdomains` boolean. Asking for subdomains and filtering here
- * is the narrowest way to get www without also collecting blog., app., or
- * anything else that happens to hang off the domain.
- */
-export function hostInEntityScope(
-  host: string,
-  registrableDomain: string,
-  includeSubdomains: boolean,
-): boolean {
-  const target = host.trim().toLowerCase().replace(/\.$/, "");
-  const root = registrableDomain.trim().toLowerCase();
-  if (!target || !root) return false;
-  if (target === root || target === `www.${root}`) return true;
-  return includeSubdomains && target.endsWith(`.${root}`);
-}
 
 function hostOf(url: string): string | null {
   try {

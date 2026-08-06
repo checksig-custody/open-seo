@@ -38,6 +38,9 @@ export {
 export {
   fetchLiveSerp,
   fetchLocalSerp,
+  // MORGANA LOCAL PATCH (UPSTREAM.md, patch P12): raw queued-task items, so the
+  // Search Intelligence collector can do apex-plus-www matching itself.
+  fetchQueuedSerpItems,
   fetchRankCheckSerp,
   fetchRankCheckTaskResult,
   postRankCheckTasks,

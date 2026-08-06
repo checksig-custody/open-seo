@@ -24,8 +24,11 @@ vi.mock("@/server/lib/dataforseo/client", () => ({
 }));
 
 const { CollectorCallError } = await import("./collection-log");
-const { collectDomainOverview, hostInEntityScope } =
-  await import("./live-domain-collector");
+// `hostInEntityScope` moved to `domains.ts` when phase 2 needed it from a pure
+// module: importing it via the collector dragged the DataForSEO SDK, and
+// through it `cloudflare:workers`, into a test that only asks about hostnames.
+const { hostInEntityScope } = await import("./domains");
+const { collectDomainOverview } = await import("./live-domain-collector");
 
 const INPUT = {
   domain: "checksig.com",

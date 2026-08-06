@@ -1,13 +1,16 @@
-import { isEnabled, type Phase0Config } from "../phase0-env";
+import { type Phase0Config } from "../phase0-env";
 import { microsToUsd } from "./budget";
-import { classifyGap, computeShareOfSearch, CTR_MODEL_VERSION } from "./gap";
-import { detectRankingEvents, detectShareShift } from "./events";
+import { computeShareOfSearch, CTR_MODEL_VERSION } from "./gap";
+import { detectShareShift } from "./events";
 import { priorityWeight, type Priority } from "./keywords";
 import * as p2 from "./p2-store";
 import * as p2an from "./p2-analytics-store";
 import * as p2jobs from "./p2-jobs-store";
 import * as store from "./store";
+import * as ledger from "./ledger-store";
 import { resolveProviderStatus } from "./service";
+import { collectReadyRankTasks, submitDueRankTask } from "./rank-live-service";
+import { recomputeDerivedState } from "./p2-derived";
 
 /**
  * Morgana Search Intelligence — phase 2 orchestration.
@@ -46,6 +49,13 @@ interface RankTickResult {
   eventsDetected: number;
   provider: string;
   skipped?: string;
+  /** Live lifecycle, absent in fixture mode. */
+  submitted?: number;
+  duplicates?: number;
+  refused?: number;
+  collected?: number;
+  pending?: number;
+  failed?: number;
 }
 
 /**
@@ -58,7 +68,7 @@ interface RankTickResult {
 export async function runRankTick(
   config: Phase0Config,
   env: object,
-  options: { limit?: number; now?: Date } = {},
+  options: { limit?: number; collectLimit?: number; now?: Date } = {},
 ): Promise<RankTickResult> {
   const now = options.now ?? new Date();
   const date = today(now);
@@ -74,17 +84,24 @@ export async function runRankTick(
       skipped: "credential_not_configured",
     };
   }
-  if (provider === "live") {
-    // Live SERP collection is not implemented in phase 2 — no credential exists
-    // in any deployed configuration. An explicit refusal beats a half-written
-    // provider call that would silently produce partial data.
+  // A PRODUCTION ENGINE NEVER MANUFACTURES A FIXTURE RANKING.
+  //
+  // Phase 1 refuses this in `refreshEntity`; the rank tick did not, and a
+  // production tick with spend switched off wrote five synthetic positions into
+  // the production database. A fixture rank is worse than a fixture metric: it
+  // is a number a human would act on, and nothing reading D1 afterwards can
+  // tell it from a measurement.
+  if (
+    provider === "fixture" &&
+    config.SEARCH_INTELLIGENCE_ENVIRONMENT === "production"
+  ) {
     return {
       due: 0,
       processed: 0,
       observationsRecorded: 0,
       eventsDetected: 0,
       provider,
-      skipped: "live_collection_not_enabled",
+      skipped: "fixture_refused_in_production",
     };
   }
 
@@ -104,6 +121,26 @@ export async function runRankTick(
   const due = await p2.dueKeywords(options.limit ?? 5, now);
   let observations = 0;
   let eventsDetected = 0;
+  let submitted = 0;
+  let duplicates = 0;
+  let refused = 0;
+
+  // LIVE: collect first, then submit.
+  //
+  // Collection is free and finishes work already paid for, so it must never be
+  // crowded out by new spending — and a tick that submits first would be one
+  // tick slower to turn every receipt into data.
+  let collected: Awaited<ReturnType<typeof collectReadyRankTasks>> | null =
+    null;
+  if (provider === "live") {
+    collected = await collectReadyRankTasks({
+      entities,
+      day: date,
+      limit: options.collectLimit ?? 10,
+      now,
+    });
+    observations += collected.observations;
+  }
 
   for (const keyword of due) {
     const job = await p2jobs.claimJob({
@@ -114,80 +151,109 @@ export async function runRankTick(
     });
     if (!job) continue;
 
-    for (const entity of entities) {
-      const rank = fixtureRank(
-        keyword.normalizedKeyword,
-        entity.normalizedDomain,
-        date,
-      );
-      const recorded = await p2.recordRank({
-        trackedKeywordId: keyword.id,
-        entityId: entity.id,
-        locationCode: keyword.locationCode,
-        languageCode: keyword.languageCode,
-        rankGroup: rank,
-        rankAbsolute: rank === null ? null : rank + 2,
-        rankingUrl:
-          rank === null
-            ? null
-            : `https://${entity.normalizedDomain}/${keyword.normalizedKeyword.replace(/\s+/g, "-")}`,
-        provider: "fixture",
+    if (provider === "live") {
+      // ONE SUBMISSION PER KEYWORD, not per entity. The SERP that answers "where
+      // is CheckSig" answers "where is every competitor" at the same time, so
+      // buying one per tracked entity would pay five times for one page. The
+      // primary entity only supplies the target domain on the request.
+      //
+      // Spend is re-read from the ledger for each submission rather than once
+      // per tick: every submission moves the daily total, and a cap checked
+      // only at the top of a loop is a cap the loop walks straight past.
+      const [dayTotals, monthTotals] = await Promise.all([
+        ledger.ledgerTotals(date),
+        ledger.ledgerTotals(date.slice(0, 7)),
+      ]);
+      const outcome = await submitDueRankTask({
+        config,
+        providerStatus: provider,
+        entity: primary,
+        keyword: {
+          id: keyword.id,
+          keyword: keyword.keyword,
+          locationCode: keyword.locationCode,
+          languageCode: keyword.languageCode,
+        },
+        jobId: job.id,
+        day: date,
+        dailySpentMicros: dayTotals.actualCostMicros,
+        monthlySpentMicros: monthTotals.actualCostMicros,
         now,
       });
-      if (recorded) observations += 1;
+      if (outcome.status === "submitted") submitted += 1;
+      if (outcome.status === "duplicate") duplicates += 1;
+      if (outcome.status === "refused") refused += 1;
+    } else {
+      for (const entity of entities) {
+        const rank = fixtureRank(
+          keyword.normalizedKeyword,
+          entity.normalizedDomain,
+          date,
+        );
+        const recorded = await p2.recordRank({
+          trackedKeywordId: keyword.id,
+          entityId: entity.id,
+          locationCode: keyword.locationCode,
+          languageCode: keyword.languageCode,
+          rankGroup: rank,
+          rankAbsolute: rank === null ? null : rank + 2,
+          rankingUrl:
+            rank === null
+              ? null
+              : `https://${entity.normalizedDomain}/${keyword.normalizedKeyword.replace(/\s+/g, "-")}`,
+          provider: "fixture",
+          now,
+        });
+        if (recorded) observations += 1;
+      }
     }
 
-    const dates = await p2.recentSnapshotDates(keyword.id, 3);
-    const current = await p2.observationsFor(keyword.id, date);
-    const previous = dates[1]
-      ? await p2.observationsFor(keyword.id, dates[1])
-      : undefined;
-    const beforePrevious = dates[2]
-      ? await p2.observationsFor(keyword.id, dates[2])
-      : undefined;
-
-    const gap = classifyGap({
-      primaryEntityId: primary.id,
-      current,
-      previous,
-      searchVolume: keyword.searchVolume,
-    });
-    await p2an.saveGapSnapshot({
-      trackedKeywordId: keyword.id,
-      snapshotDate: date,
-      category: gap.category,
-      primaryRank: gap.primaryRank,
-      bestCompetitorRank: gap.bestCompetitorRank,
-      bestCompetitorEntityId: gap.bestCompetitorEntityId,
-      opportunityScore: gap.opportunityScore,
-    });
-
-    if (
-      keyword.alertingEnabled &&
-      isEnabled(config.SEARCH_INTELLIGENCE_ENABLED)
-    ) {
-      const events = detectRankingEvents({
-        trackedKeywordId: keyword.id,
-        primaryEntityId: primary.id,
-        priority: keyword.priority,
-        snapshotDate: date,
-        current,
-        previous,
-        beforePrevious,
+    // DERIVED STATE FOLLOWS THE OBSERVATION, NOT THE REQUEST.
+    //
+    // In fixture mode the rank exists the moment it is asked for, so the gap
+    // and the events can be recomputed here. Live, a submission has bought a
+    // SERP that has not arrived: recomputing now would classify the keyword
+    // against yesterday's data and — worse — `markChecked` would push its next
+    // due time forward for work that has not happened. Live keywords are
+    // recomputed below, once collection has actually produced an observation.
+    if (provider !== "live") {
+      eventsDetected += await recomputeDerivedState({
+        config,
+        primaryId: primary.id,
+        keyword,
+        date,
+        now,
       });
-      eventsDetected += (await p2an.saveEvents(events)).length;
+      await p2.markChecked(keyword.id, keyword.trackingFrequencyHours, now);
     }
-
-    await p2.markChecked(keyword.id, keyword.trackingFrequencyHours, now);
     await p2jobs.finishJob(job.id, "succeeded");
+  }
+
+  // Live: everything that a collection actually delivered this tick.
+  if (collected) {
+    for (const keywordId of collected.keywordsTouched) {
+      const keyword = await p2.getTrackedKeyword(keywordId);
+      if (!keyword) continue;
+      eventsDetected += await recomputeDerivedState({
+        config,
+        primaryId: primary.id,
+        keyword,
+        date,
+        now,
+      });
+      await p2.markChecked(keyword.id, keyword.trackingFrequencyHours, now);
+    }
   }
 
   await p2jobs.recordPhase2Usage({
     day: date,
     jobType: "rank_check",
     // Fixtures make no HTTP call and cost nothing; they are counted as cache
-    // hits so the ledger still reflects the work done.
-    cacheHits: observations,
+    // hits so the ledger still reflects the work done. Live spend is NOT
+    // recorded here — it belongs to the shared ledger, keyed by job id, and a
+    // second copy of the same money is a second thing that can drift.
+    cacheHits: provider === "live" ? 0 : observations,
+    paidTasks: submitted,
     keywordsChecked: due.length,
   });
 
@@ -197,6 +263,16 @@ export async function runRankTick(
     observationsRecorded: observations,
     eventsDetected,
     provider,
+    ...(provider === "live"
+      ? {
+          submitted,
+          duplicates,
+          refused,
+          collected: collected?.collected ?? 0,
+          pending: collected?.pending ?? 0,
+          failed: collected?.failed ?? 0,
+        }
+      : {}),
   };
 }
 

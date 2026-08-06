@@ -141,6 +141,8 @@ export const {
   rankingEvents,
   rankingJobs,
   phase2UsageLedger,
+  // MORGANA LOCAL PATCH (UPSTREAM.md, patch P12).
+  siRankTasks,
   // MORGANA LOCAL PATCH (UPSTREAM.md, patch P8).
   siBacklinks,
   siBacklinkSnapshots,

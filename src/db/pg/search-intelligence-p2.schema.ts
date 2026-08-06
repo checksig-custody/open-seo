@@ -62,6 +62,7 @@ export const trackedKeywords = pgTable(
     trackingEnabled: boolean("tracking_enabled").notNull().default(true),
     alertingEnabled: boolean("alerting_enabled").notNull().default(true),
     searchVolume: integer("search_volume"),
+    createdSource: text("created_source").notNull().default("manual"),
     lastCheckedAt: timestampColumn("last_checked_at"),
     nextCheckAt: timestampColumn("next_check_at"),
     createdAt: timestampColumn("created_at").notNull().default(isoNow),
@@ -103,6 +104,13 @@ export const siRankSnapshots = pgTable(
     rankingUrl: text("ranking_url"),
     normalizedRankingUrl: text("normalized_ranking_url"),
     isFound: boolean("is_found").notNull(),
+    rankingDomain: text("ranking_domain"),
+    resultType: text("result_type"),
+    snapshotStatus: text("snapshot_status", { enum: ["complete", "partial"] })
+      .notNull()
+      .default("complete"),
+    snapshotStatusReason: text("snapshot_status_reason"),
+    providerTaskId: text("provider_task_id"),
     provider: text("provider", { enum: ["dataforseo", "fixture"] }).notNull(),
     estimatedCostMicros: integer("estimated_cost_micros").notNull().default(0),
     actualCostMicros: integer("actual_cost_micros").notNull().default(0),
@@ -285,5 +293,63 @@ export const phase2UsageLedger = pgTable(
   },
   (table) => [
     uniqueIndex("phase2_usage_ledger_day_job_idx").on(table.day, table.jobType),
+  ],
+);
+
+export const siRankTasks = pgTable(
+  "si_rank_tasks",
+  {
+    id: text("id").primaryKey(),
+    jobId: text("job_id"),
+    trackedKeywordId: text("tracked_keyword_id")
+      .notNull()
+      .references(() => trackedKeywords.id, { onDelete: "cascade" }),
+    entityId: text("entity_id")
+      .notNull()
+      .references(() => searchEntities.id, { onDelete: "cascade" }),
+    providerTaskId: text("provider_task_id"),
+    keyword: text("keyword").notNull(),
+    targetDomain: text("target_domain").notNull(),
+    locationCode: integer("location_code").notNull(),
+    languageCode: text("language_code").notNull(),
+    device: text("device", { enum: ["desktop", "mobile"] }).notNull(),
+    searchEngine: text("search_engine").notNull().default("google"),
+    collectionWindow: text("collection_window").notNull(),
+    status: text("status", {
+      enum: [
+        "queued",
+        "submitting",
+        "submitted",
+        "waiting",
+        "ready",
+        "fetching",
+        "normalizing",
+        "succeeded",
+        "skipped",
+        "failed",
+      ],
+    }).notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+    submittedAt: timestampColumn("submitted_at"),
+    nextCheckAt: timestampColumn("next_check_at"),
+    lastCheckedAt: timestampColumn("last_checked_at"),
+    completedAt: timestampColumn("completed_at"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    errorOrigin: text("error_origin"),
+    errorClass: text("error_class"),
+    errorCode: text("error_code"),
+    endpoint: text("endpoint"),
+    snapshotId: text("snapshot_id"),
+    createdAt: timestampColumn("created_at").notNull().default(isoNow),
+    updatedAt: timestampColumn("updated_at").notNull().default(isoNow),
+  },
+  (table) => [
+    uniqueIndex("si_rank_tasks_dedupe_idx").on(table.dedupeKey),
+    index("si_rank_tasks_status_idx").on(table.status, table.nextCheckAt),
+    index("si_rank_tasks_provider_idx").on(table.providerTaskId),
+    index("si_rank_tasks_keyword_idx").on(
+      table.trackedKeywordId,
+      table.collectionWindow,
+    ),
   ],
 );

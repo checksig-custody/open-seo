@@ -21,6 +21,9 @@ const finishJob = vi.fn();
 const runLiveDomainRefresh = vi.fn();
 const getEntity = vi.fn();
 const latestSnapshot = vi.fn();
+const listEntities = vi.fn();
+const dueKeywords = vi.fn();
+const saveEvents = vi.fn();
 
 // The whole `store` surface `service.ts` reaches for: it imports `@/db` and
 // cannot be loaded outside the Workers runtime, so it is replaced wholesale.
@@ -33,6 +36,7 @@ vi.mock("./store", () => ({
   snapshotHistory: vi.fn(),
   snapshotKeywords: vi.fn(),
   snapshotPages: vi.fn(),
+  listEntities,
 }));
 vi.mock("./job-store", () => ({ claimJob, finishJob }));
 vi.mock("./ledger-store", () => ({
@@ -41,9 +45,37 @@ vi.mock("./ledger-store", () => ({
   readBudgetState,
 }));
 vi.mock("./refresh-live", () => ({ runLiveDomainRefresh }));
+vi.mock("./p2-store", () => ({
+  dueKeywords,
+  listTrackedKeywords: vi.fn(),
+  listClusters: vi.fn(),
+  getTrackedKeyword: vi.fn(),
+  markChecked: vi.fn(),
+  recordRank: vi.fn(),
+  recentSnapshotDates: vi.fn(),
+  observationsFor: vi.fn(),
+}));
+vi.mock("./p2-jobs-store", () => ({
+  claimJob: vi.fn(),
+  finishJob: vi.fn(),
+  recordPhase2Usage: vi.fn(),
+}));
+vi.mock("./rank-live-service", () => ({
+  submitDueRankTask: vi.fn(),
+  collectReadyRankTasks: vi.fn(),
+}));
+vi.mock("./p2-analytics-store", () => ({
+  saveGapSnapshot: vi.fn(),
+  saveEvents,
+  saveShareSnapshot: vi.fn(),
+  shareHistory: vi.fn(),
+}));
+vi.mock("./p2-derived", () => ({ recomputeDerivedState: vi.fn() }));
 
 const { readPhase0Config } = await import("../phase0-env");
 const { refreshEntity } = await import("./service");
+const { runRankTick } = await import("./p2-service");
+const { collectReadyRankTasks } = await import("./rank-live-service");
 
 const ENTITY = {
   id: "se_1",
@@ -84,6 +116,10 @@ beforeEach(() => {
   finishJob.mockResolvedValue(undefined);
   persistSnapshot.mockResolvedValue({ snapshotId: "ds_1", created: true });
   recordUsage.mockResolvedValue(undefined);
+  // Set here, not at mock-definition time: `clearAllMocks` wipes implementations.
+  listEntities.mockResolvedValue([ENTITY]);
+  dueKeywords.mockResolvedValue([]);
+  saveEvents.mockResolvedValue([]);
 });
 
 const run = async (environment: "staging" | "production") => {
@@ -125,5 +161,30 @@ describe("fixture refusal in production", () => {
     expect(persistSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ source: "fixture" }),
     );
+  });
+});
+
+/**
+ * The same rule, for rank tracking.
+ *
+ * `refreshEntity` refused a fixture in production from phase 1; `runRankTick`
+ * did not, and a production tick with spend switched off wrote five synthetic
+ * POSITIONS into the production database. A fixture rank is worse than a
+ * fixture metric — it is a number a human acts on — and nothing reading D1
+ * afterwards can tell it from a measurement.
+ */
+describe("fixture refusal in the rank tick", () => {
+  it("refuses to manufacture rankings when the engine is production", async () => {
+    const env = envFor("production");
+    const result = await runRankTick(readPhase0Config(env), env);
+    expect(result.skipped).toBe("fixture_refused_in_production");
+    expect(result.observationsRecorded).toBe(0);
+    expect(collectReadyRankTasks).not.toHaveBeenCalled();
+  });
+
+  it("still serves fixture rankings in staging", async () => {
+    const env = envFor("staging");
+    const result = await runRankTick(readPhase0Config(env), env);
+    expect(result.skipped).not.toBe("fixture_refused_in_production");
   });
 });

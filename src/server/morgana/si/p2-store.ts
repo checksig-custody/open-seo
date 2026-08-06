@@ -111,6 +111,8 @@ interface CreateKeywordInput {
   locationCode?: number;
   languageCode?: string;
   alertingEnabled?: boolean;
+  /** `bootstrap` for a seeded row, `manual` for one a human added. */
+  createdSource?: "bootstrap" | "manual";
 }
 
 /**
@@ -148,6 +150,7 @@ export async function createTrackedKeyword(
     trackingEnabled: true,
     alertingEnabled: input.alertingEnabled ?? true,
     searchVolume: null,
+    createdSource: input.createdSource ?? "manual",
     lastCheckedAt: null,
     // Due immediately: a newly added keyword should be measured on the next
     // tick rather than waiting out a full interval.
@@ -176,6 +179,24 @@ export async function bulkImportKeywords(
     else skipped += 1;
   }
   return { created, skipped };
+}
+
+/**
+ * One tracked keyword by id.
+ *
+ * The live path needs this because it recomputes derived state for keywords a
+ * COLLECTION touched, which is a different set from the keywords a tick found
+ * due — a SERP bought two ticks ago lands now.
+ */
+export async function getTrackedKeyword(
+  id: string,
+): Promise<TrackedKeywordRow | null> {
+  const rows = await db
+    .select()
+    .from(trackedKeywords)
+    .where(eq(trackedKeywords.id, id))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export async function listTrackedKeywords(
@@ -284,6 +305,19 @@ interface RecordRankInput {
   rankAbsolute: number | null;
   rankingUrl: string | null;
   provider: "dataforseo" | "fixture";
+  /** The host the ranking URL resolved to, after normalization. */
+  rankingDomain?: string | null;
+  /** The SERP element the position came from — `organic` for a real ranking. */
+  resultType?: string | null;
+  /**
+   * `partial` marks an observation the provider could not fully answer. It is
+   * stored so nothing downstream mistakes it for a measurement — in particular
+   * it can never confirm a lost ranking.
+   */
+  snapshotStatus?: "complete" | "partial";
+  snapshotStatusReason?: string | null;
+  /** The queued task this came from; the accounting correlation id. */
+  providerTaskId?: string | null;
   estimatedCostMicros?: number;
   actualCostMicros?: number;
   now?: Date;
@@ -311,6 +345,11 @@ export async function recordRank(input: RecordRankInput): Promise<boolean> {
         : null,
       // Absence is recorded as absence, never as a sentinel position.
       isFound: input.rankGroup !== null,
+      rankingDomain: input.rankingDomain ?? null,
+      resultType: input.resultType ?? null,
+      snapshotStatus: input.snapshotStatus ?? "complete",
+      snapshotStatusReason: input.snapshotStatusReason ?? null,
+      providerTaskId: input.providerTaskId ?? null,
       provider: input.provider,
       estimatedCostMicros: input.estimatedCostMicros ?? 0,
       actualCostMicros: input.actualCostMicros ?? 0,
