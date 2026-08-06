@@ -59,6 +59,75 @@ interface RankTickResult {
 }
 
 /**
+ * Why a tick did nothing.
+ *
+ * Only ever set when the tick did NOTHING, because Morgana's scheduler returns
+ * early on a skip: a collect-only tick that redeemed or advanced a task did real
+ * work, and reporting it as skipped would strand the observation it just
+ * collected before share of search ever saw it.
+ *
+ * A caller that asked for no submissions was not refused one, so collect-only is
+ * reported as collect-only; `fixture_refused_in_production` is reserved for a
+ * tick that actually wanted to submit and was not allowed to.
+ */
+function skipReasonFor(input: {
+  dueCount: number;
+  collectedAnything: boolean;
+  submissionLimit: number;
+  fixtureRefusedInProduction: boolean;
+}): string | undefined {
+  if (input.dueCount > 0 || input.collectedAnything) return undefined;
+  if (input.submissionLimit === 0) return "collect_only_nothing_due";
+  return input.fixtureRefusedInProduction
+    ? "fixture_refused_in_production"
+    : undefined;
+}
+
+/**
+ * Staging's synthetic rankings, one per entity.
+ *
+ * Never reached in production — the caller refuses the fixture path there — and
+ * kept in its own function so that refusal is a single condition rather than a
+ * branch buried in the tick.
+ */
+async function recordFixtureRanks(input: {
+  entities: readonly store.SearchEntityRow[];
+  keyword: {
+    id: string;
+    normalizedKeyword: string;
+    locationCode: number;
+    languageCode: string;
+  };
+  date: string;
+  now: Date;
+}): Promise<number> {
+  let recordedCount = 0;
+  for (const entity of input.entities) {
+    const rank = fixtureRank(
+      input.keyword.normalizedKeyword,
+      entity.normalizedDomain,
+      input.date,
+    );
+    const recorded = await p2.recordRank({
+      trackedKeywordId: input.keyword.id,
+      entityId: entity.id,
+      locationCode: input.keyword.locationCode,
+      languageCode: input.keyword.languageCode,
+      rankGroup: rank,
+      rankAbsolute: rank === null ? null : rank + 2,
+      rankingUrl:
+        rank === null
+          ? null
+          : `https://${entity.normalizedDomain}/${input.keyword.normalizedKeyword.replace(/\s+/g, "-")}`,
+      provider: "fixture",
+      now: input.now,
+    });
+    if (recorded) recordedCount += 1;
+  }
+  return recordedCount;
+}
+
+/**
  * One scheduler step: check the most urgent due keywords against every enabled
  * entity, store the observations, then classify the gap and detect events.
  *
@@ -74,7 +143,24 @@ export async function runRankTick(
   const date = today(now);
   const provider = resolveProviderStatus(config, env);
 
+  // TWO AUTHORITIES, NOT ONE. `resolveProviderStatus` answers "may this engine
+  // spend", and using that single answer to gate the whole tick was wrong:
+  //
+  //   task_post  buys a SERP           -> needs spend authority
+  //   task_get   reads one already paid for -> needs a credential and a receipt
+  //
+  // With paid calls off the provider resolves to `fixture`, and the production
+  // fixture guard below then refused the entire tick — including the free fetch
+  // that collects a SERP the ledger already shows as bought. That left paid work
+  // stranded behind a switch it does not use, and forced spend authority to be
+  // turned on to retrieve something that costs nothing.
+  const isProduction = config.SEARCH_INTELLIGENCE_ENVIRONMENT === "production";
+  const submissionLimit = options.limit ?? 5;
+  const collectLimit = options.collectLimit ?? 10;
+
   if (provider === "not_configured") {
+    // The one condition that stops BOTH: with no credential there is nothing to
+    // ask with, so a persisted receipt cannot be redeemed either.
     return {
       due: 0,
       processed: 0,
@@ -84,6 +170,7 @@ export async function runRankTick(
       skipped: "credential_not_configured",
     };
   }
+
   // A PRODUCTION ENGINE NEVER MANUFACTURES A FIXTURE RANKING.
   //
   // Phase 1 refuses this in `refreshEntity`; the rank tick did not, and a
@@ -91,19 +178,13 @@ export async function runRankTick(
   // the production database. A fixture rank is worse than a fixture metric: it
   // is a number a human would act on, and nothing reading D1 afterwards can
   // tell it from a measurement.
-  if (
-    provider === "fixture" &&
-    config.SEARCH_INTELLIGENCE_ENVIRONMENT === "production"
-  ) {
-    return {
-      due: 0,
-      processed: 0,
-      observationsRecorded: 0,
-      eventsDetected: 0,
-      provider,
-      skipped: "fixture_refused_in_production",
-    };
-  }
+  //
+  // It now gates the SUBMISSION path only. Collection cannot manufacture
+  // anything: it reads a stored `provider_task_id` from the real API or does
+  // nothing at all.
+  const fixtureRefusedInProduction = provider === "fixture" && isProduction;
+  const canSubmit =
+    submissionLimit > 0 && (provider === "live" || !fixtureRefusedInProduction);
 
   const entities = await store.listEntities();
   const primary = entities.find((e) => e.entityType === "primary");
@@ -118,29 +199,40 @@ export async function runRankTick(
     };
   }
 
-  const due = await p2.dueKeywords(options.limit ?? 5, now);
   let observations = 0;
   let eventsDetected = 0;
   let submitted = 0;
   let duplicates = 0;
   let refused = 0;
 
-  // LIVE: collect first, then submit.
+  // COLLECT FIRST, AND ON ITS OWN TERMS.
   //
-  // Collection is free and finishes work already paid for, so it must never be
-  // crowded out by new spending — and a tick that submits first would be one
-  // tick slower to turn every receipt into data.
+  // Free, so the budget does not gate it; already paid for, so spend authority
+  // does not either. It needs a credential (checked above) and a task carrying
+  // a receipt — `collectReadyRankTasks` refuses any row without one, which is
+  // also what makes a fixture task uncollectable: fixtures never get a receipt.
+  //
+  // Before submission, because free work that finishes something already bought
+  // must never be crowded out by new spending.
   let collected: Awaited<ReturnType<typeof collectReadyRankTasks>> | null =
     null;
-  if (provider === "live") {
+  if (collectLimit > 0) {
     collected = await collectReadyRankTasks({
       entities,
       day: date,
-      limit: options.collectLimit ?? 10,
+      limit: collectLimit,
       now,
     });
     observations += collected.observations;
   }
+
+  // `submissionLimit` of 0 is the collect-only mode, and it is enforced here
+  // rather than trusted: no keyword is selected, so no code path below can
+  // reach `task_post`.
+  const due = canSubmit ? await p2.dueKeywords(submissionLimit, now) : [];
+  const collectedAnything =
+    collected !== null &&
+    collected.collected + collected.pending + collected.failed > 0;
 
   for (const keyword of due) {
     const job = await p2jobs.claimJob({
@@ -184,28 +276,12 @@ export async function runRankTick(
       if (outcome.status === "duplicate") duplicates += 1;
       if (outcome.status === "refused") refused += 1;
     } else {
-      for (const entity of entities) {
-        const rank = fixtureRank(
-          keyword.normalizedKeyword,
-          entity.normalizedDomain,
-          date,
-        );
-        const recorded = await p2.recordRank({
-          trackedKeywordId: keyword.id,
-          entityId: entity.id,
-          locationCode: keyword.locationCode,
-          languageCode: keyword.languageCode,
-          rankGroup: rank,
-          rankAbsolute: rank === null ? null : rank + 2,
-          rankingUrl:
-            rank === null
-              ? null
-              : `https://${entity.normalizedDomain}/${keyword.normalizedKeyword.replace(/\s+/g, "-")}`,
-          provider: "fixture",
-          now,
-        });
-        if (recorded) observations += 1;
-      }
+      observations += await recordFixtureRanks({
+        entities,
+        keyword,
+        date,
+        now,
+      });
     }
 
     // DERIVED STATE FOLLOWS THE OBSERVATION, NOT THE REQUEST.
@@ -245,6 +321,13 @@ export async function runRankTick(
     }
   }
 
+  const skipped = skipReasonFor({
+    dueCount: due.length,
+    collectedAnything,
+    submissionLimit,
+    fixtureRefusedInProduction,
+  });
+
   await p2jobs.recordPhase2Usage({
     day: date,
     jobType: "rank_check",
@@ -263,7 +346,11 @@ export async function runRankTick(
     observationsRecorded: observations,
     eventsDetected,
     provider,
-    ...(provider === "live"
+    ...(skipped ? { skipped } : {}),
+    // Reported whenever the live lifecycle was actually exercised — which now
+    // includes a collect-only tick with spend switched off, the case that used
+    // to be invisible.
+    ...(provider === "live" || collected !== null
       ? {
           submitted,
           duplicates,

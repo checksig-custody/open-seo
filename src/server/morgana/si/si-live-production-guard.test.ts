@@ -75,7 +75,9 @@ vi.mock("./p2-derived", () => ({ recomputeDerivedState: vi.fn() }));
 const { readPhase0Config } = await import("../phase0-env");
 const { refreshEntity } = await import("./service");
 const { runRankTick } = await import("./p2-service");
-const { collectReadyRankTasks } = await import("./rank-live-service");
+const { collectReadyRankTasks, submitDueRankTask } =
+  await import("./rank-live-service");
+const { recordRank } = await import("./p2-store");
 
 const ENTITY = {
   id: "se_1",
@@ -174,17 +176,121 @@ describe("fixture refusal in production", () => {
  * afterwards can tell it from a measurement.
  */
 describe("fixture refusal in the rank tick", () => {
+  beforeEach(() => {
+    // Collection now runs whenever a credential exists — see the gating tests
+    // below — so it must have a result to return in every rank-tick case.
+    vi.mocked(collectReadyRankTasks).mockResolvedValue({
+      collected: 0,
+      pending: 0,
+      failed: 0,
+      observations: 0,
+      keywordsTouched: [],
+    });
+  });
+
   it("refuses to manufacture rankings when the engine is production", async () => {
     const env = envFor("production");
     const result = await runRankTick(readPhase0Config(env), env);
     expect(result.skipped).toBe("fixture_refused_in_production");
     expect(result.observationsRecorded).toBe(0);
-    expect(collectReadyRankTasks).not.toHaveBeenCalled();
+    // Nothing synthetic was written. Collection may run — it cannot invent a
+    // ranking — but no fixture rank reaches the database.
+    expect(recordRank).not.toHaveBeenCalled();
   });
 
   it("still serves fixture rankings in staging", async () => {
     const env = envFor("staging");
     const result = await runRankTick(readPhase0Config(env), env);
     expect(result.skipped).not.toBe("fixture_refused_in_production");
+  });
+});
+
+/**
+ * SPENDING AND COLLECTING ARE DIFFERENT AUTHORITIES.
+ *
+ * `task_post` buys a SERP and needs spend authority. `task_get` reads one the
+ * ledger already shows as bought and needs a credential and a receipt. Gating
+ * both on `resolveProviderStatus` stranded paid work behind a switch it does
+ * not use: with paid calls off the provider resolves to `fixture`, and the
+ * guard above then refused the free fetch too. In production that meant spend
+ * authority had to be switched on to retrieve something that costs nothing.
+ */
+const collectResult = (over: Record<string, unknown> = {}) => ({
+  collected: 0,
+  pending: 0,
+  failed: 0,
+  observations: 0,
+  keywordsTouched: [] as string[],
+  ...over,
+});
+
+describe("result fetch is gated on a receipt, not on spend authority", () => {
+  it("collects a persisted live task in production with paid calls OFF", async () => {
+    vi.mocked(collectReadyRankTasks).mockResolvedValue(
+      collectResult({ collected: 1 }),
+    );
+    const env = envFor("production");
+    const result = await runRankTick(readPhase0Config(env), env, {
+      limit: 0,
+      collectLimit: 1,
+    });
+
+    expect(collectReadyRankTasks).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 1 }),
+    );
+    expect(result.collected).toBe(1);
+    // Not "skipped": the tick did real work, and Morgana's scheduler returns
+    // early on a skip, which would strand the observation it just collected.
+    expect(result.skipped).toBeUndefined();
+  });
+
+  it("buys nothing while collecting: no keyword is even selected", async () => {
+    vi.mocked(collectReadyRankTasks).mockResolvedValue(
+      collectResult({ pending: 1 }),
+    );
+    const env = envFor("production");
+    const result = await runRankTick(readPhase0Config(env), env, {
+      limit: 0,
+      collectLimit: 1,
+    });
+
+    expect(dueKeywords).not.toHaveBeenCalled();
+    expect(submitDueRankTask).not.toHaveBeenCalled();
+    expect(result.submitted).toBe(0);
+    expect(result.pending).toBe(1);
+  });
+
+  it("refuses a submission with paid calls off even when one is asked for", async () => {
+    vi.mocked(collectReadyRankTasks).mockResolvedValue(collectResult());
+    const env = envFor("production");
+    const result = await runRankTick(readPhase0Config(env), env, { limit: 5 });
+
+    // Paid calls off in production resolves to `fixture`, which may not submit
+    // and may not manufacture a ranking either.
+    expect(submitDueRankTask).not.toHaveBeenCalled();
+    expect(recordRank).not.toHaveBeenCalled();
+    expect(result.skipped).toBe("fixture_refused_in_production");
+  });
+
+  it("says so plainly when a collect-only tick had nothing to collect", async () => {
+    vi.mocked(collectReadyRankTasks).mockResolvedValue(collectResult());
+    const env = envFor("production");
+    const result = await runRankTick(readPhase0Config(env), env, {
+      limit: 0,
+      collectLimit: 1,
+    });
+    expect(result.skipped).toBe("collect_only_nothing_due");
+  });
+
+  it("still refuses everything without a credential — nothing to ask with", async () => {
+    const env = { ...envFor("production") };
+    delete (env as Record<string, unknown>)
+      .DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY;
+    const result = await runRankTick(readPhase0Config(env), env, {
+      limit: 0,
+      collectLimit: 1,
+    });
+    expect(result.skipped).toBe("credential_not_configured");
+    expect(collectReadyRankTasks).not.toHaveBeenCalled();
   });
 });

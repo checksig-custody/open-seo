@@ -296,8 +296,23 @@ export async function collectReadyRankTasks(input: {
 
   for (const task of due) {
     const entity = byId.get(task.entityId);
-    if (!entity || !task.providerTaskId) {
-      await tasks.markSkipped({ id: task.id, errorCode: "UNCLASSIFIED" });
+    // NO RECEIPT, NO FETCH. `provider_task_id` is the only evidence that this
+    // row corresponds to a real, paid provider task; without it there is
+    // nothing to ask the provider for, and asking anyway would be inventing a
+    // task id. It is also what makes a fixture row uncollectable — fixtures
+    // never receive one.
+    if (!task.providerTaskId) {
+      await tasks.markSkipped({
+        id: task.id,
+        errorCode: "MISSING_PROVIDER_TASK_ID",
+      });
+      continue;
+    }
+    if (!entity) {
+      // The entity was deleted or disabled after the SERP was bought. The
+      // result is unattributable, which is a different fact from a failed
+      // fetch, so it is named separately and no provider call is made.
+      await tasks.markSkipped({ id: task.id, errorCode: "UNKNOWN_ENTITY" });
       continue;
     }
 

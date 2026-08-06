@@ -159,6 +159,41 @@ describe("collection", () => {
     expect(postRankCheckTasks).not.toHaveBeenCalled();
   });
 
+  it("refuses a task with no receipt instead of inventing a task id", async () => {
+    // The receipt IS the authority to fetch: without a `provider_task_id` there
+    // is no provider task to ask about, and a fixture row never gets one — which
+    // is what keeps a fixture uncollectable without a second guard.
+    collectableTasks.mockResolvedValue([{ ...TASK, providerTaskId: null }]);
+    const result = await collectReadyRankTasks({
+      entities: [ENTITY],
+      day: "2026-08-06",
+      limit: 5,
+    });
+    expect(fetchQueuedSerpItems).not.toHaveBeenCalled();
+    expect(markSkipped).toHaveBeenCalledWith({
+      id: TASK.id,
+      errorCode: "MISSING_PROVIDER_TASK_ID",
+    });
+    expect(result.collected).toBe(0);
+    expect(recordRank).not.toHaveBeenCalled();
+  });
+
+  it("names an unattributable result rather than dropping it silently", async () => {
+    collectableTasks.mockResolvedValue([
+      { ...submittedTask, entityId: "se_deleted" },
+    ]);
+    await collectReadyRankTasks({
+      entities: [ENTITY],
+      day: "2026-08-06",
+      limit: 5,
+    });
+    expect(fetchQueuedSerpItems).not.toHaveBeenCalled();
+    expect(markSkipped).toHaveBeenCalledWith({
+      id: TASK.id,
+      errorCode: "UNKNOWN_ENTITY",
+    });
+  });
+
   it("stores the ranking with its provenance", async () => {
     collectableTasks.mockResolvedValue([submittedTask]);
     fetchQueuedSerpItems.mockResolvedValue({
