@@ -46,6 +46,8 @@ interface VolumeRefreshResult {
   costMicros: number;
   costStatus: CollectionAccounting["costStatus"];
   source: "dataforseo" | null;
+  /** Keywords whose volume changed, and whose derived rows are now stale. */
+  recomputeKeywordIds: string[];
 }
 
 const empty = (
@@ -62,6 +64,7 @@ const empty = (
   costMicros: 0,
   costStatus: "zero",
   source: null,
+  recomputeKeywordIds: [],
 });
 
 /**
@@ -174,6 +177,7 @@ export async function refreshKeywordVolumes(
   }
 
   const byKeyword = new Map(batch.map((k) => [k.keyword.toLowerCase(), k]));
+  const recomputeKeywordIds: string[] = [];
   let stored = 0;
   let withVolume = 0;
   let noData = 0;
@@ -210,6 +214,7 @@ export async function refreshKeywordVolumes(
       continue;
     }
     withVolume += 1;
+    recomputeKeywordIds.push(keyword.id);
     // Only a stated volume reaches the read model. A zero is written as zero —
     // it is a measurement — while an absent one leaves the previous best answer
     // in place rather than erasing it.
@@ -227,5 +232,6 @@ export async function refreshKeywordVolumes(
     costMicros: outcome.accounting.actualCostMicros,
     costStatus: outcome.accounting.costStatus,
     source: "dataforseo",
+    recomputeKeywordIds,
   };
 }

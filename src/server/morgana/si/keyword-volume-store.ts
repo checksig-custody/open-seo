@@ -103,6 +103,14 @@ export async function updateKeywordVolume(
     .where(eq(trackedKeywords.id, trackedKeywordId));
 }
 
+/** Every tracked keyword id, for a recomputation that spans the watchlist. */
+export async function trackedKeywordIds(): Promise<string[]> {
+  const rows = await db
+    .select({ id: trackedKeywords.id })
+    .from(trackedKeywords);
+  return rows.map((row) => row.id);
+}
+
 /** The newest measurement per keyword, for the read surface. */
 export async function latestVolumeSnapshots(limit = 100) {
   return db

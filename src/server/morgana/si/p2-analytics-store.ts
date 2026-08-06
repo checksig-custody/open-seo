@@ -85,56 +85,77 @@ export async function saveShareSnapshot(input: {
   calculatedAt?: string | null;
   ctrModelVersion: string;
 }): Promise<void> {
-  await db
-    .insert(shareOfSearchSnapshots)
-    .values({
-      id: newId("ss"),
-      entityId: input.entityId,
-      clusterId: input.clusterId,
-      snapshotDate: input.snapshotDate,
-      visibilityScore: input.visibilityScore,
-      share: input.share,
-      status: input.status,
-      reason: input.reason ?? null,
-      keywordsConsidered: input.keywordsConsidered,
-      keywordsCovered: input.keywordsCovered,
-      eligibleKeywords: input.eligibleKeywords ?? 0,
-      excludedKeywords: input.excludedKeywords ?? 0,
-      exclusionReasons: input.exclusionReasons ?? null,
-      coverage: input.coverage ?? null,
-      calculatedAt: input.calculatedAt ?? null,
-      ctrModelVersion: input.ctrModelVersion,
-      createdAt: nowIso(),
-    })
-    .onConflictDoUpdate({
-      target: [
-        shareOfSearchSnapshots.entityId,
-        shareOfSearchSnapshots.clusterId,
-        shareOfSearchSnapshots.snapshotDate,
-      ],
-      set: {
-        visibilityScore: input.visibilityScore,
-        share: input.share,
-        status: input.status,
-        reason: input.reason ?? null,
-        keywordsConsidered: input.keywordsConsidered,
-        keywordsCovered: input.keywordsCovered,
-        ctrModelVersion: input.ctrModelVersion,
-        eligibleKeywords: input.eligibleKeywords ?? 0,
-        excludedKeywords: input.excludedKeywords ?? 0,
-        exclusionReasons: input.exclusionReasons ?? null,
-        coverage: input.coverage ?? null,
-        calculatedAt: input.calculatedAt ?? null,
-      },
-    });
+  // WHY NOT ONE UPSERT.
+  //
+  // The dedupe index is (entity, cluster, date), and the "all clusters" row
+  // carries `cluster_id = NULL`. SQLite treats NULLs as DISTINCT in a UNIQUE
+  // index, so `ON CONFLICT` never matches those rows and every recalculation
+  // INSERTED another one: production held 30 rows for 5 entities on a single
+  // day, and a reader taking "the" row for today could get any of them. The
+  // same NULL trap the ledger hit in phase 1.
+  //
+  // An UPDATE that matches `IS NULL` explicitly, falling back to an INSERT when
+  // it changes nothing, is the upsert SQLite will not do here.
+  const values = {
+    visibilityScore: input.visibilityScore,
+    share: input.share,
+    status: input.status,
+    reason: input.reason ?? null,
+    keywordsConsidered: input.keywordsConsidered,
+    keywordsCovered: input.keywordsCovered,
+    eligibleKeywords: input.eligibleKeywords ?? 0,
+    excludedKeywords: input.excludedKeywords ?? 0,
+    exclusionReasons: input.exclusionReasons ?? null,
+    coverage: input.coverage ?? null,
+    calculatedAt: input.calculatedAt ?? null,
+    ctrModelVersion: input.ctrModelVersion,
+  };
+
+  const updated = await db
+    .update(shareOfSearchSnapshots)
+    .set(values)
+    .where(
+      and(
+        eq(shareOfSearchSnapshots.entityId, input.entityId),
+        input.clusterId === null
+          ? isNull(shareOfSearchSnapshots.clusterId)
+          : eq(shareOfSearchSnapshots.clusterId, input.clusterId),
+        eq(shareOfSearchSnapshots.snapshotDate, input.snapshotDate),
+      ),
+    )
+    .returning({ id: shareOfSearchSnapshots.id });
+  if (updated.length > 0) return;
+
+  await db.insert(shareOfSearchSnapshots).values({
+    id: newId("ss"),
+    entityId: input.entityId,
+    clusterId: input.clusterId,
+    snapshotDate: input.snapshotDate,
+    ...values,
+    createdAt: nowIso(),
+  });
 }
 
 export async function shareHistory(sinceDate: string) {
-  return db
+  const rows = await db
     .select()
     .from(shareOfSearchSnapshots)
     .where(gte(shareOfSearchSnapshots.snapshotDate, sinceDate))
     .orderBy(shareOfSearchSnapshots.snapshotDate);
+
+  // The rows written before the upsert above was fixed are still there, and
+  // they are honest history — just redundant. Reading the newest per entity,
+  // cluster and date means a stale duplicate can never surface as a data point,
+  // without deleting anything to achieve it.
+  const newest = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) {
+    const key = `${row.entityId}|${row.clusterId ?? ""}|${row.snapshotDate}`;
+    const held = newest.get(key);
+    if (!held || row.createdAt >= held.createdAt) newest.set(key, row);
+  }
+  return [...newest.values()].sort((a, b) =>
+    a.snapshotDate.localeCompare(b.snapshotDate),
+  );
 }
 
 // --- events -----------------------------------------------------------------

@@ -1,5 +1,6 @@
 import { envelope, json, num, readJson } from "./http";
 import * as keywordVolumes from "./keyword-volume-service";
+import * as p2service from "./p2-service";
 import * as keywordVolumeStore from "./keyword-volume-store";
 import type { SiRequestContext } from "./router";
 
@@ -31,6 +32,32 @@ export async function dispatchKeywordVolume(
       limit: num(body.limit) ?? 50,
       trackedKeywordIds: ids,
     });
+
+    // A measured volume changes the gap and the opportunity score for that
+    // keyword, so the derived rows are refreshed here rather than left stale
+    // until the next rank tick. Free — it reads observations already stored.
+    const recomputed =
+      result.withVolume > 0
+        ? await p2service.recomputeAfterVolumeChange(
+            config,
+            result.recomputeKeywordIds,
+          )
+        : { keywords: 0, eventsDetected: 0 };
+
+    return json(
+      envelope(config, { ...result, recomputed }, { providerStatus }),
+    );
+  }
+
+  // Recompute the gap and the opportunity scores from data already stored.
+  //
+  // Free, and separate from the collection that pays: a volume measured earlier,
+  // a CTR model change or a correction all invalidate the derived rows without
+  // anybody needing to buy anything. Without this the only way to refresh them
+  // would be to spend money again, which is a bad reason to make a paid call.
+  if (route === "gap-recompute" && method === "POST") {
+    const keywords = await keywordVolumeStore.trackedKeywordIds();
+    const result = await p2service.recomputeAfterVolumeChange(config, keywords);
     return json(envelope(config, result, { providerStatus }));
   }
 

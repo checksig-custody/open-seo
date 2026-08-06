@@ -304,6 +304,43 @@ export async function runRankTick(
 }
 
 /** Recompute Tracked Keyword Share of Search for today, overall and per cluster. */
+/**
+ * Recompute what a new search volume changes.
+ *
+ * A volume is an input to the gap classification and to every opportunity
+ * score, so measuring one invalidates yesterday's derived row for that keyword.
+ * Recomputing here means the chain ends where the user reads it — a weighted
+ * gap and a score — rather than one tick later. Free: no provider call, only
+ * observations already stored.
+ */
+export async function recomputeAfterVolumeChange(
+  config: Phase0Config,
+  trackedKeywordIds: readonly string[],
+  options: { now?: Date } = {},
+): Promise<{ keywords: number; eventsDetected: number }> {
+  const now = options.now ?? new Date();
+  const date = today(now);
+  const entities = await store.listEntities();
+  const primary = entities.find((e) => e.entityType === "primary");
+  if (!primary) return { keywords: 0, eventsDetected: 0 };
+
+  let eventsDetected = 0;
+  let touched = 0;
+  for (const id of trackedKeywordIds) {
+    const keyword = await p2.getTrackedKeyword(id);
+    if (!keyword) continue;
+    eventsDetected += await recomputeDerivedState({
+      config,
+      primaryId: primary.id,
+      keyword,
+      date,
+      now,
+    });
+    touched += 1;
+  }
+  return { keywords: touched, eventsDetected };
+}
+
 export async function recalculateShareOfSearch(
   options: { now?: Date } = {},
 ): Promise<{ status: string; entities: number; clusters: number }> {
