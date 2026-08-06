@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { domainRefreshJobs } from "@/db/schema";
 import { newId, nowIso } from "./ids";
+import type { CollectionAccounting } from "./collection-accounting";
 
 /**
  * Morgana Search Intelligence — the refresh job lifecycle.
@@ -121,6 +122,20 @@ export async function claimJob(input: {
   }
 }
 
+/**
+ * Finish a job, recording what its operation actually cost.
+ *
+ * `accounting` is the SAME object the ledger was written from — not a second
+ * derivation. It used to be absent entirely, so both money columns defaulted to
+ * zero and a job that had spent 0.04044 USD reported spending nothing while the
+ * ledger reported the truth. A job and its ledger rows describe one operation
+ * and must agree about it.
+ *
+ * Omitting `accounting` is still valid and still means zero, but it now means
+ * an honest zero: the fixture path and the skip paths make no provider call, so
+ * there is nothing to attribute. `costStatus` stays null for those, which reads
+ * as "no provider cost applies" rather than "measured zero".
+ */
 export async function finishJob(
   id: string,
   patch: {
@@ -128,8 +143,7 @@ export async function finishJob(
     snapshotId?: string | null;
     lastError?: string | null;
     skipReason?: string | null;
-    estimatedCostMicros?: number;
-    actualCostMicros?: number;
+    accounting?: CollectionAccounting;
   },
 ): Promise<void> {
   await db
@@ -140,8 +154,9 @@ export async function finishJob(
       // Sanitised by the caller; never a stack trace or a credential.
       lastError: patch.lastError?.slice(0, 500) ?? null,
       skipReason: patch.skipReason ?? null,
-      estimatedCostMicros: patch.estimatedCostMicros ?? 0,
-      actualCostMicros: patch.actualCostMicros ?? 0,
+      estimatedCostMicros: patch.accounting?.estimatedCostMicros ?? 0,
+      actualCostMicros: patch.accounting?.actualCostMicros ?? 0,
+      costStatus: patch.accounting?.costStatus ?? null,
       finishedAt: nowIso(),
     })
     .where(eq(domainRefreshJobs.id, id));

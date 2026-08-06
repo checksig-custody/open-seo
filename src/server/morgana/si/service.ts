@@ -204,6 +204,7 @@ export async function refreshEntity(
     await ledger.recordUsage({
       day: snapshotDate,
       entityId: entity.id,
+      jobId: job.id,
       endpointPath: "fixture/domain_overview",
       meteringClass: "cache",
     });
@@ -267,6 +268,7 @@ export async function refreshEntity(
     await ledger.recordUsage({
       day: snapshotDate,
       entityId: entity.id,
+      jobId: job.id,
       endpointPath: "dataforseo_labs/google/domain_rank_overview/live",
       meteringClass: "paid_submission",
       blockedByBudget: true,

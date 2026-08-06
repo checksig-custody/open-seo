@@ -30,6 +30,13 @@ type CostStatus = "reported" | "zero" | "not_reported";
 interface RecordUsageInput {
   day: string;
   entityId?: string | null;
+  /**
+   * The refresh job that caused this call — the correlation id that lets
+   * "what did this job cost" be answered from the ledger rather than inferred
+   * from a timestamp or a domain. Absent for usage with no job, which is stored
+   * as `''` because a NULL would break the unique index this row upserts on.
+   */
+  jobId?: string | null;
   endpointPath: string;
   meteringClass: MeteringClass;
   estimatedCostMicros?: number;
@@ -67,6 +74,7 @@ export async function recordUsage(input: RecordUsageInput): Promise<void> {
     id: newId("ul"),
     day: input.day,
     entityId: input.entityId ?? null,
+    jobId: input.jobId ?? "",
     endpointPath: input.endpointPath,
     meteringClass: input.meteringClass,
     requests: isCache ? 0 : 1,
@@ -97,6 +105,7 @@ export async function recordUsage(input: RecordUsageInput): Promise<void> {
         searchUsageLedger.day,
         searchUsageLedger.endpointPath,
         searchUsageLedger.meteringClass,
+        searchUsageLedger.jobId,
       ],
       set: {
         requests: sql`${searchUsageLedger.requests} + ${values.requests}`,

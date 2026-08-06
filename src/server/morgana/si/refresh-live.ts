@@ -1,5 +1,10 @@
 import { collectDomainOverview } from "./live-domain-collector";
 import { failureSummary, logCollectionFailure } from "./collection-log";
+import {
+  accountFor,
+  NO_CALLS,
+  type CollectionAccounting,
+} from "./collection-accounting";
 import * as store from "./store";
 import * as jobs from "./job-store";
 import * as ledger from "./ledger-store";
@@ -31,6 +36,12 @@ interface LiveRefreshOutcome {
   snapshotId: string | null;
   reason: string;
   costMicros: number;
+  /**
+   * The same accounting record written to the ledger and to the job row, so a
+   * caller diagnosing a collection sees the figures the two stores hold rather
+   * than a third summary computed for the response.
+   */
+  accounting: CollectionAccounting;
 }
 
 export async function runLiveDomainRefresh(input: {
@@ -63,19 +74,29 @@ export async function runLiveDomainRefresh(input: {
     // One row per endpoint, each carrying its own provider-reported cost, so a
     // call whose cost was not reported is visible as exactly that instead of
     // being averaged into the others.
-    let costMicros = 0;
+    // ONE ACCOUNTING RECORD, derived once from the calls that were made. The
+    // per-call loop below writes the ledger rows; the totals come from here and
+    // from nowhere else, so the job, the ledger and this function's return
+    // value cannot disagree about what the operation cost.
+    const accounting = accountFor(collected.calls, {
+      metered: true,
+      paidSubmission: true,
+    });
     for (const call of collected.calls) {
       await ledger.recordUsage({
         day: snapshotDate,
         entityId: entity.id,
+        // The correlation id: these rows belong to this job and can be summed
+        // back to it without guessing from a timestamp.
+        jobId,
         endpointPath: call.endpointPath,
         meteringClass: "paid_submission",
         costStatus: call.cost.status,
         actualCostMicros: call.cost.micros ?? undefined,
         estimatedCostMicros: call.cost.micros ?? undefined,
       });
-      costMicros += call.cost.micros ?? 0;
     }
+    const costMicros = accounting.actualCostMicros;
 
     const result = await store.persistSnapshot({
       entity,
@@ -104,6 +125,9 @@ export async function runLiveDomainRefresh(input: {
       snapshotId: result.snapshotId,
       skipReason: partial ? "partial_result" : undefined,
       lastError: partial ? (collected.partialReason ?? null) : null,
+      // The provider calls happened and were billed whether or not the result
+      // was complete, so a partial collection still records what it cost.
+      accounting,
     });
     return {
       status: partial ? "failed" : result.created ? "created" : "reused",
@@ -114,6 +138,7 @@ export async function runLiveDomainRefresh(input: {
           ? "provider_has_no_data"
           : "live",
       costMicros,
+      accounting,
     };
   } catch (error) {
     // WHAT FAILED, not what the catch happens to sit around.
@@ -125,20 +150,32 @@ export async function runLiveDomainRefresh(input: {
     // the classification now comes from the error itself.
     const failure = logCollectionFailure(entity.id, error);
 
+    // A FAILED CALL HAS NO KNOWN COST, and that is not the same as costing
+    // nothing. The provider may have charged for the call that then failed and
+    // we cannot see whether it did, so the accounting records one request whose
+    // cost was never reported: counted, but contributing no money.
+    //
+    // A `collection` origin means the provider calls all succeeded and
+    // something after them failed. Their spend is ALREADY in the ledger, written
+    // before persistence was attempted, so nothing is added here — adding a
+    // failed paid_submission would invent a request that was never made.
+    const failedCall = {
+      endpointPath: failure.endpointPath ?? DOMAIN_OVERVIEW_ENDPOINT,
+      cost: { micros: null, status: "not_reported" as const },
+    };
+    const accounting =
+      failure.origin === "provider"
+        ? accountFor([failedCall], { metered: true, paidSubmission: true })
+        : NO_CALLS;
+
     if (failure.origin === "provider") {
-      // The provider may well have charged for the call that then failed, so
-      // it is recorded as metered. Over-recording a request we know was made
-      // is safer than under-recording spend we cannot see — but only for a
-      // call that actually happened: a persistence failure invents no request.
       await ledger.recordUsage({
         day: snapshotDate,
         entityId: entity.id,
-        endpointPath: failure.endpointPath ?? DOMAIN_OVERVIEW_ENDPOINT,
+        jobId,
+        endpointPath: failedCall.endpointPath,
         meteringClass: "paid_submission",
-        // The provider may have charged for the call that then failed, and we
-        // cannot know: `not_reported` is the honest status, and it keeps the
-        // failure out of the money column while still counting the request.
-        costStatus: "not_reported",
+        costStatus: failedCall.cost.status,
         failed: true,
       });
     }
@@ -153,12 +190,14 @@ export async function runLiveDomainRefresh(input: {
       skipReason: reason,
       // Class, code and endpoint only — every part sanitised at the source.
       lastError: failureSummary(failure),
+      accounting,
     });
     return {
       status: "failed",
       snapshotId: null,
       reason,
-      costMicros: 0,
+      costMicros: accounting.actualCostMicros,
+      accounting,
     };
   }
 }

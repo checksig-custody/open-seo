@@ -164,20 +164,20 @@
     // 3. the two ALERT flags — reach a human.
     // 4. AI_VISIBILITY_LIVE_PROVIDER — the only phase-5 switch that can spend.
     //
-    // PAID_CALLS is ON, bounded by the caps below (0.20/day, 2.00/month) which
-    // `assert-isolation.mjs` refuses to deploy without.
+    // PAID_CALLS is OFF, and this time that is a resting state rather than an
+    // unresolved problem.
     //
-    // It was switched off at the end of the 2026-08-06 verification because two
-    // collections had failed and neither could be explained: the only record was
-    // a job row reading `provider_error` with `last_error = NULL`, written by a
-    // catch that covers the provider calls AND the persistence after them. The
-    // reason was therefore a guess, not evidence.
+    // Phase 1 is closed: the collector was verified against the real API, the
+    // job and the ledger now agree about what a collection cost, and every
+    // number in the activation report was read back from production. Nothing
+    // between here and phase 2 needs to spend, and an authority nobody is using
+    // should not be left switched on — the engine has no cron, but the flag is
+    // the control that decides whether a call CAN be paid for, not whether
+    // something is currently calling.
     //
-    // What changed is that a failure now describes itself — origin, endpoint,
-    // error class and typed code, all sanitised — and a production engine
-    // refuses to write a fixture at all. Spend is authorised again because the
-    // next failure is diagnosable, which the last one was not.
-    "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "true",
+    // Turning it back on is one line plus a deploy, and the caps below already
+    // bound what it can do. Do that when phase 2 has a collector to run.
+    "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "false",
     "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED": "false",
     "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED": "false",
     "SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED": "false",

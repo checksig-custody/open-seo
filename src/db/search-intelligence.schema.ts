@@ -232,6 +232,16 @@ export const domainRefreshJobs = sqliteTable(
     skipReason: text("skip_reason"),
     estimatedCostMicros: integer("estimated_cost_micros").notNull().default(0),
     actualCostMicros: integer("actual_cost_micros").notNull().default(0),
+    /**
+     * What the provider said about the cost of THIS job's collection.
+     *
+     * Nullable, and null means "written before the accounting fix": those rows
+     * carry a zero cost that was a default, not a measurement, and must not be
+     * read as one.
+     */
+    costStatus: text("cost_status", {
+      enum: ["reported", "zero", "not_reported"],
+    }),
     snapshotId: text("snapshot_id"),
     createdAt: text("created_at")
       .notNull()
@@ -262,6 +272,16 @@ export const searchUsageLedger = sqliteTable(
     /** UTC day, YYYY-MM-DD. */
     day: text("day").notNull(),
     entityId: text("entity_id"),
+    /**
+     * The refresh job this usage belongs to — the correlation id that makes
+     * "what did this job cost" answerable from the ledger itself.
+     *
+     * Empty string, never null, for usage with no job (and for every row
+     * written before this column existed): SQLite treats NULLs as distinct in a
+     * unique index, so a nullable column here would silently stop the upsert
+     * deduplicating and turn one aggregate row into one row per call.
+     */
+    jobId: text("job_id").notNull().default(""),
     /** DataForSEO path, joined with '/'. */
     endpointPath: text("endpoint_path").notNull(),
     meteringClass: text("metering_class", {
@@ -307,12 +327,17 @@ export const searchUsageLedger = sqliteTable(
       .default(sql`(current_timestamp)`),
   },
   (table) => [
+    // `job_id` joins the key so usage is attributable to the operation that
+    // caused it. Aggregation is unaffected: every consumer sums over a day or a
+    // month, and a SUM does not care how many rows it spans.
     uniqueIndex("search_usage_ledger_day_endpoint_idx").on(
       table.day,
       table.endpointPath,
       table.meteringClass,
+      table.jobId,
     ),
     index("search_usage_ledger_day_idx").on(table.day),
+    index("search_usage_ledger_job_idx").on(table.jobId),
   ],
 );
 
