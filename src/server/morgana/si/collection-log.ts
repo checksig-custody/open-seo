@@ -39,8 +39,14 @@ export class CollectorCallError extends Error {
   }
 }
 
-/** What failed and where, carrying no provider text at all. */
-export interface FailureDescriptor {
+/**
+ * What failed and where, carrying no provider text at all.
+ *
+ * Not exported: callers receive one from `logCollectionFailure` and hand it
+ * straight to `failureSummary`, so nothing outside this module needs to name
+ * the type — and an export nothing imports is one knip is right to reject.
+ */
+interface FailureDescriptor {
   /**
    * `provider` — a DataForSEO call threw. Money may have been spent.
    * `collection` — everything else: the ledger write, the snapshot write, a
@@ -90,7 +96,7 @@ function readNameAndCode(error: unknown): {
  * of the wrapper, which would otherwise report `CollectorCallError` for every
  * distinct provider fault.
  */
-export function describeCollectionFailure(error: unknown): FailureDescriptor {
+function describeCollectionFailure(error: unknown): FailureDescriptor {
   if (error instanceof CollectorCallError) {
     return {
       origin: "provider",
