@@ -24,6 +24,21 @@ export const siBudgetReservations = sqliteTable(
     operationType: text("operation_type").notNull(),
     jobId: text("job_id"),
     operationId: text("operation_id"),
+    /**
+     * WHAT THIS RESERVATION AUTHORISED, not merely how much it may cost.
+     *
+     * Without these two a reservation can be summed but not audited: the row
+     * says "backlinks, 100 000 µUSD" and nothing else, so which domain was
+     * bought and how many rows were asked for is only recoverable by guessing
+     * from timestamps. `subject` is the target the operation ran against
+     * (a domain for backlinks, a keyword for a SERP task); `subjectScope` is
+     * the size of the question asked — the sample limit — because cost scales
+     * with rows and an estimate is only checkable against the sample it
+     * assumed. Both nullable: an operation that has no meaningful target says
+     * so rather than inventing one.
+     */
+    subject: text("subject"),
+    subjectScope: integer("subject_scope"),
     /** The worst case, never an average: capacity is held against this. */
     estimatedMaxCostMicros: integer("estimated_max_cost_micros").notNull(),
     /** NULL while unknown — never 0, which would release capacity too early. */

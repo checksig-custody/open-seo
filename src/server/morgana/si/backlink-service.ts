@@ -17,6 +17,7 @@ import {
   createFixtureBacklinkProvider,
   createLiveBacklinkProvider,
   DEFAULT_LIMITS,
+  effectiveSampleLimit,
   normalizeRawBacklink,
   type BacklinkProvider,
   type CollectionLimits,
@@ -29,7 +30,7 @@ import {
   getBrandProtectionSignals,
   type BrandProtectionSignals,
 } from "./brand-protection";
-import { nowIso } from "./ids";
+import { newId, nowIso } from "./ids";
 import { buildEvents } from "./backlink-findings";
 import { backlinkBudgetAllows, recordBacklinkUsage } from "./backlink-cost";
 
@@ -116,6 +117,14 @@ export async function refreshBacklinks(
   }
 
   const provider = providerFor(config, env);
+
+  // ONE ID FOR THE WHOLE PASS. The reservation, the ledger row and the snapshot
+  // each used to carry their own null in `operation_id`, so three records of
+  // the same collection could only be joined by timestamp. Minted here, before
+  // anything is authorised, so even a refusal is attributable.
+  const operationId = newId("bop");
+  const sampleLimit = effectiveSampleLimit(limits);
+
   // The budget guard runs BEFORE the provider call, not after: checking
   // afterwards would mean the money is already spent. A fixture run is free, so
   // it is never gated — gating it would make the whole feature untestable while
@@ -125,6 +134,14 @@ export async function refreshBacklinks(
       ? await backlinkBudgetAllows(config, {
           reservedForOtherPhasesUsd: RESERVED_FOR_EARLIER_PHASES_USD,
           now,
+          // Passed explicitly, and the entity most of all: without it the
+          // idempotency key collapses to one hour-bucket shared by every
+          // entity, and the second domain of the hour is refused as a
+          // duplicate of the first.
+          entityId,
+          target: entity.canonicalDomain,
+          sampleLimit,
+          operationId,
         })
       : { allowed: true, reason: null };
   const reservationId = budget.reservationId ?? null;
@@ -155,6 +172,7 @@ export async function refreshBacklinks(
     domainsProcessed: collected.referringDomains.length,
     estimatedCostMicros: collected.estimatedCostMicros,
     actualCostMicros: collected.actualCostMicros,
+    operationId,
   });
 
   const quality = assessSnapshot({
@@ -232,6 +250,7 @@ export async function refreshBacklinks(
       provider: collected.provider,
       estimatedCostMicros: 0,
       actualCostMicros: 0,
+      operationId,
     });
     return emptyResult(
       entityId,
@@ -453,6 +472,7 @@ export async function refreshBacklinks(
     provider: collected.provider,
     estimatedCostMicros: collected.estimatedCostMicros,
     actualCostMicros: collected.actualCostMicros,
+    operationId,
   });
 
   return {

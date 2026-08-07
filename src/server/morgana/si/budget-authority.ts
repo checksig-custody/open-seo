@@ -274,6 +274,14 @@ export async function authorizePaidOperation(
     idempotencyKey: string;
     jobId?: string | null;
     operationId?: string | null;
+    /**
+     * What the operation runs against — a domain, a keyword — and how large a
+     * question it asks of it. Recorded so a reservation can be audited rather
+     * than only summed: the estimate below is only checkable against the sample
+     * size it assumed, and for Backlinks the cost scales with exactly that.
+     */
+    subject?: string | null;
+    subjectScope?: number | null;
     providerConfigured: boolean;
     now?: Date;
   },
@@ -336,6 +344,8 @@ export async function authorizePaidOperation(
       operationType: input.operationType,
       jobId: input.jobId ?? null,
       operationId: input.operationId ?? null,
+      subject: input.subject ?? null,
+      subjectScope: input.subjectScope ?? null,
       estimatedMaxCostMicros: input.worstCaseMicros,
       status: "reserved",
       budgetDay: day,

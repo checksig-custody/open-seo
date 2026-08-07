@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { type Phase0Config } from "../phase0-env";
-import type { ReadinessFacts } from "./rollout-readiness";
+import { MIN_RANKING_COVERAGE, type ReadinessFacts } from "./rollout-readiness";
 
 /**
  * Morgana Search Intelligence — readiness read from the database, not asserted.
@@ -30,6 +30,35 @@ async function countRows(table: string, where: string): Promise<number> {
   }
 }
 
+/** How many distinct things, not how many rows about them. */
+async function countDistinct(
+  table: string,
+  column: string,
+  where: string,
+): Promise<number> {
+  try {
+    const rows = await db.all<{ n: number }>(
+      sql.raw(
+        `SELECT COUNT(DISTINCT ${column}) AS n FROM ${table} WHERE ${where}`,
+      ),
+    );
+    return Number(rows[0]?.n ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The share of the eligible watchlist a fact covers.
+ *
+ * Null when nothing is eligible: a ratio with an empty denominator is not zero
+ * coverage, it is an unanswerable question, and reporting it as 0 would present
+ * "we track no keywords" as "we have measured none of them".
+ */
+function coverageOf(covered: number, eligible: number): number | null {
+  return eligible > 0 ? covered / eligible : null;
+}
+
 export async function readinessFacts(
   config: Phase0Config,
   spend: {
@@ -44,6 +73,8 @@ export async function readinessFacts(
   const [
     domainOverviewSnapshots,
     rankObservations,
+    keywordsRanked,
+    keywordsPositioned,
     keywordsWithVolume,
     siteAuditRuns,
     backlinkSnapshotsLive,
@@ -54,6 +85,28 @@ export async function readinessFacts(
     // a provider counts, a fixture does not.
     countRows("domain_snapshots", "source = 'dataforseo'"),
     countRows("si_rank_snapshots", "provider = 'dataforseo'"),
+    // COUNT THE KEYWORDS, NOT THE ROWS. `si_rank_snapshots` holds one row per
+    // keyword PER ENTITY per day, so a single keyword observed against CheckSig
+    // and four competitors is five rows. Divided by a count of distinct
+    // keywords that ratio is not a coverage at all — and in production on
+    // 2026-08-07 it read 5/6 = 0.83 while exactly one keyword of six had ever
+    // been measured. The gate believed Share of Search could compute; the
+    // metric itself refused. Two populations, one fraction.
+    countDistinct(
+      "si_rank_snapshots",
+      "tracked_keyword_id",
+      "provider = 'dataforseo'",
+    ),
+    // A POSITION, not merely a measurement. This is the numerator Share of
+    // Search actually needs and it matches `computeShareOfSearch`'s own
+    // definition of "covered" — a found result with a rank group. A real
+    // not-found is a valid observation, but there is no position to weight, so
+    // it cannot contribute to a share.
+    countDistinct(
+      "si_rank_snapshots",
+      "tracked_keyword_id",
+      "provider = 'dataforseo' AND is_found = 1 AND rank_group IS NOT NULL",
+    ),
     countRows("tracked_keywords", "search_volume IS NOT NULL"),
     countRows("si_site_audit_runs", "1 = 1"),
     countRows("si_backlink_snapshots", "source = 'dataforseo'"),
@@ -80,10 +133,20 @@ export async function readinessFacts(
     backlinkSnapshotsLive,
     backlinkCompetitorSnapshots,
     aiObservationsLive,
+    keywordsRanked,
+    keywordsPositioned,
+    // HAVE WE LOOKED? Distinct eligible keywords with a real live observation,
+    // found or genuinely not-found. A not-found is a measurement — the SERP was
+    // read and CheckSig was not in it — so it counts here.
+    rankingCoverage: coverageOf(keywordsRanked, keywordsWithVolume),
+    // CAN WE WEIGHT IT? Distinct eligible keywords holding an actual position.
+    // Strictly the smaller of the two, and the one Share of Search needs.
+    positionCoverage: coverageOf(keywordsPositioned, keywordsWithVolume),
     // Share of Search needs half the keywords with a known volume to have a
-    // position. One of six does not clear that, and the metric says so itself.
+    // POSITION, which is what the metric itself requires.
     shareOfSearchComputable:
-      keywordsWithVolume > 0 && rankObservations / keywordsWithVolume >= 0.5,
+      keywordsWithVolume > 0 &&
+      keywordsPositioned / keywordsWithVolume >= MIN_RANKING_COVERAGE,
     measuredCostMicros: {
       domain_overview: costOf("domain_overview"),
       ranking: costOf("phase2"),

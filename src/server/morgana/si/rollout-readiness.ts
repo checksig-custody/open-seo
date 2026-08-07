@@ -67,6 +67,14 @@ export interface ReadinessFacts {
   backlinkSnapshotsLive: number;
   backlinkCompetitorSnapshots: number;
   aiObservationsLive: number;
+  /** Distinct eligible keywords with a live observation, found or not-found. */
+  keywordsRanked: number;
+  /** Distinct eligible keywords holding an actual position. */
+  keywordsPositioned: number;
+  /** `keywordsRanked / keywordsWithVolume`; null when nothing is eligible. */
+  rankingCoverage: number | null;
+  /** `keywordsPositioned / keywordsWithVolume`; null when nothing is eligible. */
+  positionCoverage: number | null;
   shareOfSearchComputable: boolean;
   /** Measured provider costs, per collector, in micro-USD. Null = unmeasured. */
   measuredCostMicros: Record<string, number | null>;
@@ -79,13 +87,53 @@ export interface ReadinessFacts {
 const BLOCKER = {
   noLiveRun: "no_live_provider_run",
   budgetDay: "blocked_by_budget_day",
+  /** Too few of the eligible keywords have been LOOKED AT. */
   coverage: "insufficient_ranking_coverage",
+  /**
+   * Enough keywords were measured; too few of them rank.
+   *
+   * A distinct blocker, and the distinction is the point. "We have not
+   * collected enough" is fixed by spending money. "We collected them and
+   * CheckSig is not in the results" is fixed by ranking better, and no
+   * amount of provider spend will move it. Reporting the second as the first
+   * would send someone to buy data that already exists.
+   */
+  positions: "insufficient_ranked_positions",
   costUnknown: "provider_cost_unknown",
   entitlement: "provider_entitlement_unverified",
   webhooks: "webhooks_invalid",
   reconcile: "reconciliation_pending",
   unexpected: "unexpected_spend_detected",
 } as const;
+
+/**
+ * The threshold the readiness report holds ranking coverage to.
+ *
+ * Deliberately the same 0.5 `computeShareOfSearch` enforces on its own inputs.
+ * It is stated here as a named constant rather than inlined so that reading
+ * this file answers "how much is enough" without going and finding out.
+ */
+export const MIN_RANKING_COVERAGE = 0.5;
+
+/** Has enough of the eligible watchlist actually been looked at? */
+function hasRankingCoverage(facts: ReadinessFacts): boolean {
+  return (
+    facts.rankingCoverage !== null &&
+    facts.rankingCoverage >= MIN_RANKING_COVERAGE
+  );
+}
+
+function rankingBlockers(facts: ReadinessFacts): string[] {
+  if (facts.rankObservations === 0) return [BLOCKER.noLiveRun];
+  return hasRankingCoverage(facts) ? [] : [BLOCKER.coverage];
+}
+
+function rankingDataAvailability(
+  facts: ReadinessFacts,
+): CapabilityReadiness["dataAvailability"] {
+  if (facts.rankObservations === 0) return "none";
+  return hasRankingCoverage(facts) ? "sufficient" : "partial";
+}
 
 /**
  * The capability matrix.
@@ -153,13 +201,19 @@ export function capabilityMatrix(
       facts.rankObservations > 0,
       facts.measuredCostMicros.ranking ?? null,
       {
-        // One keyword observed is a verified collector and a thin dataset. Both
-        // are true, and reporting only the first would oversell it.
-        dataAvailability: "partial",
-        blockers:
-          facts.rankObservations > 0 ? [BLOCKER.coverage] : [BLOCKER.noLiveRun],
-        nextAllowedAction:
-          "widen ranking coverage before activation is meaningful",
+        // THIS ROW USED TO CARRY THE BLOCKER UNCONDITIONALLY — `[coverage]`
+        // whenever a single observation existed, with no comparison against
+        // anything. Since `ranking` is not waivable, the gate could never open
+        // again once the first rank landed, however many keywords were later
+        // collected. It now asks the coverage what it says.
+        //
+        // A verified collector with a thin dataset is `partial`: both facts are
+        // true, and reporting only the first would oversell it.
+        dataAvailability: rankingDataAvailability(facts),
+        blockers: rankingBlockers(facts),
+        nextAllowedAction: hasRankingCoverage(facts)
+          ? "activation decision"
+          : "widen ranking coverage before activation is meaningful",
       },
     ),
     verified(
@@ -177,13 +231,23 @@ export function capabilityMatrix(
         ? "sufficient"
         : "insufficient_for_metric",
       // The distinction that matters: the code works, the inputs are live, and
-      // the metric still refuses — because coverage is 1 of 6, not because
-      // anything is broken.
+      // the metric still refuses — because too few keywords hold a position,
+      // not because anything is broken.
       state: facts.shareOfSearchComputable
         ? "ready_for_activation"
         : "insufficient_data",
-      blockers: facts.shareOfSearchComputable ? [] : [BLOCKER.coverage],
-      nextAllowedAction: "collect rankings for more keywords with known volume",
+      // WHICH SHORTAGE, precisely. If the watchlist has not been measured, that
+      // is a collection gap and more spend fixes it. If it has been measured
+      // and CheckSig does not rank, spending again changes nothing — so the
+      // metric says the second thing rather than borrowing the first.
+      blockers: facts.shareOfSearchComputable
+        ? []
+        : hasRankingCoverage(facts)
+          ? [BLOCKER.positions]
+          : [BLOCKER.coverage],
+      nextAllowedAction: hasRankingCoverage(facts)
+        ? "improve rankings; the eligible keywords have been measured"
+        : "collect rankings for more keywords with known volume",
       lastProviderCostMicros: null,
       ...base,
     },

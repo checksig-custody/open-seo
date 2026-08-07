@@ -280,6 +280,37 @@ describe("authorization", () => {
     expect(outcome.allowed).toBe(false);
     if (!outcome.allowed) expect(outcome.code).toBe("denied_unexpected_spend");
   });
+
+  it("records what it authorised, not only how much", async () => {
+    // A reservation that says `backlinks / 100000` and nothing else can be
+    // summed but not audited: which domain, and how many rows, were only
+    // recoverable by correlating timestamps against a snapshot table. The
+    // sample size matters most of all — Backlinks charges per returned row, so
+    // an estimate is checkable only against the sample it assumed.
+    await authorizePaidOperation(config, {
+      collector: "backlinks",
+      operationType: "backlink_collection",
+      worstCaseMicros: 100_000,
+      idempotencyKey: "backlinks|se_conio|2026-08-07T17",
+      subject: "conio.com",
+      subjectScope: 100,
+      operationId: "bop_1",
+      providerConfigured: true,
+    });
+    expect(inserted[0]).toMatchObject({
+      collector: "backlinks",
+      subject: "conio.com",
+      subjectScope: 100,
+      operationId: "bop_1",
+      estimatedMaxCostMicros: 100_000,
+    });
+  });
+
+  it("states an absent subject as null rather than inventing one", async () => {
+    await authorize(1_000, "no-subject");
+    expect(inserted[0]?.subject).toBeNull();
+    expect(inserted[0]?.subjectScope).toBeNull();
+  });
 });
 
 describe("reconciliation", () => {

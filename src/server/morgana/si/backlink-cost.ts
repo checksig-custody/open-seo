@@ -43,6 +43,8 @@ interface UsageInput {
   cacheMisses?: number;
   estimatedCostMicros?: number;
   actualCostMicros?: number;
+  /** Correlates this ledger row with the reservation and the snapshot. */
+  operationId?: string | null;
 }
 
 /** Only these classes consume the paid budget. */
@@ -76,6 +78,9 @@ export async function recordBacklinkUsage(input: UsageInput): Promise<void> {
       cacheMisses: input.cacheMisses ?? 0,
       estimatedCostMicros: input.estimatedCostMicros ?? 0,
       actualCostMicros: input.actualCostMicros ?? 0,
+      // The ledger models "no operation" as the empty string, not NULL — a
+      // pre-existing choice of that table, followed here rather than changed.
+      operationId: input.operationId ?? "",
       createdAt: at,
       updatedAt: at,
     })
@@ -240,6 +245,11 @@ export async function backlinkBudgetAllows(
     /** Identifies the operation, so a retry cannot reserve capacity twice. */
     idempotencyKey?: string;
     entityId?: string | null;
+    /** The domain being collected, and the sample size asked of it. */
+    target?: string | null;
+    sampleLimit?: number | null;
+    jobId?: string | null;
+    operationId?: string | null;
   } = {},
 ): Promise<{
   allowed: boolean;
@@ -257,9 +267,19 @@ export async function backlinkBudgetAllows(
     collector: "backlinks",
     operationType: "backlink_collection",
     worstCaseMicros: WORST_CASE_BACKLINK_MICROS,
+    // THE ENTITY BELONGS IN THE KEY, and for one deploy it was not there.
+    // `entityId` was accepted here and never passed by the only caller, so the
+    // key degraded to `backlinks|unknown|<hour>` — a bucket shared by every
+    // entity. Collecting a second domain inside the same UTC hour would have
+    // been refused as a duplicate of the first, which reads as "already paid
+    // for" when nothing of the kind had happened.
     idempotencyKey:
       options.idempotencyKey ??
       `backlinks|${options.entityId ?? "unknown"}|${now.toISOString().slice(0, 13)}`,
+    subject: options.target ?? null,
+    subjectScope: options.sampleLimit ?? null,
+    jobId: options.jobId ?? null,
+    operationId: options.operationId ?? null,
     providerConfigured: resolveProviderStatus(config, {}) !== "not_configured",
     now,
   });

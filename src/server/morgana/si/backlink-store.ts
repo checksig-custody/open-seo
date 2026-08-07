@@ -215,6 +215,12 @@ interface SnapshotInput {
   datasetSignature?: string | null;
   costStatus?: string | null;
   providerReportedCostMicros?: number | null;
+  /**
+   * The pass this snapshot came from. Shared with the ledger row and the budget
+   * reservation, so "what did this collection cost" is a join rather than a
+   * correlation by timestamp.
+   */
+  operationId?: string | null;
 }
 
 export async function saveSnapshot(input: SnapshotInput): Promise<void> {
@@ -236,6 +242,7 @@ export async function saveSnapshot(input: SnapshotInput): Promise<void> {
       datasetSignature: input.datasetSignature ?? null,
       costStatus: input.costStatus ?? null,
       providerReportedCostMicros: input.providerReportedCostMicros ?? null,
+      operationId: input.operationId ?? null,
       backlinkCount: input.backlinkCount,
       referringDomainCount: input.referringDomainCount,
       dofollowCount: input.dofollowCount,

@@ -337,6 +337,13 @@
       "when": 1786009800000,
       "tag": "0047_global_budget",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1786013400000,
+      "tag": "0048_reservation_subject",
+      "breakpoints": true
     }
   ]
 }

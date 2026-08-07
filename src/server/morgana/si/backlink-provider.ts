@@ -115,6 +115,24 @@ export const DEFAULT_LIMITS: CollectionLimits = {
   anchors: 100,
 };
 
+/**
+ * How many rows this collection will actually ask for.
+ *
+ * The smaller of what the caller wanted and what this collector will pay for.
+ * Named and exported rather than inlined because two things need the same
+ * answer: the live provider, which sends it, and the budget reservation, which
+ * records the sample the estimate assumed. Cost scales with returned rows, so
+ * a reservation stating a different sample from the one that was bought would
+ * be worse than one stating none.
+ */
+export function effectiveSampleLimit(limits: CollectionLimits): number {
+  return Math.min(
+    limits.backlinks,
+    limits.referringDomains,
+    DEFAULT_SAMPLE_LIMIT,
+  );
+}
+
 export interface BacklinkProvider {
   readonly name: string;
   collect(input: {
@@ -343,11 +361,7 @@ export function createLiveBacklinkProvider(): BacklinkProvider {
       // The sample is the smaller of what the caller asked for and what this
       // collector will pay for: cost scales with returned rows, and a first
       // live run should be inspectable rather than exhaustive.
-      const sampleLimit = Math.min(
-        input.limits.backlinks,
-        input.limits.referringDomains,
-        DEFAULT_SAMPLE_LIMIT,
-      );
+      const sampleLimit = effectiveSampleLimit(input.limits);
       const outcome = await collectLiveBacklinks({
         target: input.target,
         sampleLimit,

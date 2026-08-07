@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS "si_budget_reservations" (
 	"released_at" text,
 	-- Sanitized, and only ever a code plus this engine's own words.
 	"failure_reason" text
+);--> statement-breakpoint
 
 -- The whole concurrency guarantee: a retry of the same operation collides here
 -- instead of reserving a second time.

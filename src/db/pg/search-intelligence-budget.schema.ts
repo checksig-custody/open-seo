@@ -16,6 +16,8 @@ export const siBudgetReservations = pgTable(
     operationType: text("operation_type").notNull(),
     jobId: text("job_id"),
     operationId: text("operation_id"),
+    subject: text("subject"),
+    subjectScope: integer("subject_scope"),
     estimatedMaxCostMicros: integer("estimated_max_cost_micros").notNull(),
     actualCostMicros: integer("actual_cost_micros"),
     costStatus: text("cost_status"),
