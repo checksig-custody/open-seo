@@ -77,7 +77,13 @@ function skipReasonFor(input: {
 export async function runRankTick(
   config: Phase0Config,
   env: object,
-  options: { limit?: number; collectLimit?: number; now?: Date } = {},
+  options: {
+    limit?: number;
+    collectLimit?: number;
+    now?: Date;
+    /** Restrict paid submissions to these keywords. See `dueKeywords`. */
+    trackedKeywordIds?: readonly string[];
+  } = {},
 ): Promise<RankTickResult> {
   const now = options.now ?? new Date();
   const date = today(now);
@@ -169,7 +175,9 @@ export async function runRankTick(
   // `submissionLimit` of 0 is the collect-only mode, and it is enforced here
   // rather than trusted: no keyword is selected, so no code path below can
   // reach `task_post`.
-  const due = canSubmit ? await p2.dueKeywords(submissionLimit, now) : [];
+  const due = canSubmit
+    ? await p2.dueKeywords(submissionLimit, now, options.trackedKeywordIds)
+    : [];
   const collectedAnything =
     collected !== null &&
     collected.collected + collected.pending + collected.failed > 0;

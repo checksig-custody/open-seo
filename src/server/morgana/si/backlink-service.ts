@@ -16,8 +16,8 @@ import { assessSnapshot, diffSnapshots } from "./backlink-diff";
 import {
   createFixtureBacklinkProvider,
   createLiveBacklinkProvider,
-  DEFAULT_LIMITS,
   effectiveSampleLimit,
+  mergeLimits,
   normalizeRawBacklink,
   type BacklinkProvider,
   type CollectionLimits,
@@ -93,6 +93,82 @@ async function officialRoots(): Promise<string[]> {
 }
 
 /**
+ * Hold capacity for this collection, or refuse it.
+ *
+ * Runs BEFORE the provider call, never after: checking afterwards would mean
+ * the money is already spent. A fixture run is free and is therefore never
+ * gated — gating it would make the whole feature untestable while no credential
+ * exists.
+ *
+ * Every identifying field is passed explicitly, and the entity most of all:
+ * without it the idempotency key collapses to a single hour-bucket shared by
+ * every entity, and the second domain collected inside that hour is refused as
+ * a duplicate of the first — which reads as "already paid for" when nothing of
+ * the kind happened.
+ */
+async function authorizeCollection(
+  config: Phase0Config,
+  input: {
+    live: boolean;
+    entityId: string;
+    target: string;
+    sampleLimit: number;
+    operationId: string;
+    now: Date;
+  },
+): Promise<{
+  allowed: boolean;
+  reason: string | null;
+  reservationId?: string;
+}> {
+  if (!input.live) return { allowed: true, reason: null };
+  return backlinkBudgetAllows(config, {
+    reservedForOtherPhasesUsd: RESERVED_FOR_EARLIER_PHASES_USD,
+    now: input.now,
+    entityId: input.entityId,
+    target: input.target,
+    sampleLimit: input.sampleLimit,
+    operationId: input.operationId,
+  });
+}
+
+/**
+ * Close the reservation, whichever way the call went.
+ *
+ * A provider that answered is charged, so the reservation commits for what it
+ * ACTUALLY cost — including when that exceeds the estimate, which is how the
+ * Backlinks overrun (79 236 µUSD against a 25 000 µUSD estimate) becomes
+ * visible instead of being truncated to the amount that was authorised.
+ *
+ * A provider that failed without cost gives its capacity back. A cost nobody
+ * reported KEEPS holding it, because the call may still have been charged and
+ * releasing capacity for money that was spent is how a cap is exceeded quietly.
+ */
+async function closeReservation(
+  reservationId: string | null,
+  collected: {
+    providerOk: boolean;
+    actualCostMicros: number;
+    costStatus?: "reported" | "zero" | "not_reported";
+  },
+  now: Date,
+): Promise<void> {
+  if (!reservationId) return;
+  if (collected.providerOk || collected.actualCostMicros > 0) {
+    await commitReservation(reservationId, {
+      actualCostMicros:
+        collected.costStatus === "not_reported"
+          ? null
+          : collected.actualCostMicros,
+      costStatus: collected.costStatus ?? "reported",
+      now,
+    });
+    return;
+  }
+  await releaseReservation(reservationId, "PROVIDER_FAILED_NO_COST", now);
+}
+
+/**
  * Refresh one entity's backlink profile.
  *
  * Bounded by `limits` so a single invocation cannot exhaust the subrequest
@@ -110,7 +186,10 @@ export async function refreshBacklinks(
   } = {},
 ): Promise<RefreshResult> {
   const now = options.now ?? new Date();
-  const limits: CollectionLimits = { ...DEFAULT_LIMITS, ...options.limits };
+  // NOT a spread: an `undefined` override assigns over the default rather than
+  // skipping it, which is how every limit became `undefined` and the sample
+  // limit became NaN. See `mergeLimits`.
+  const limits: CollectionLimits = mergeLimits(options.limits);
   const entity = await entityStore.getEntity(entityId);
   if (!entity) {
     return emptyResult(entityId, "unknown", "entity not found");
@@ -125,25 +204,14 @@ export async function refreshBacklinks(
   const operationId = newId("bop");
   const sampleLimit = effectiveSampleLimit(limits);
 
-  // The budget guard runs BEFORE the provider call, not after: checking
-  // afterwards would mean the money is already spent. A fixture run is free, so
-  // it is never gated — gating it would make the whole feature untestable while
-  // no credential exists.
-  const budget =
-    provider.name === "live"
-      ? await backlinkBudgetAllows(config, {
-          reservedForOtherPhasesUsd: RESERVED_FOR_EARLIER_PHASES_USD,
-          now,
-          // Passed explicitly, and the entity most of all: without it the
-          // idempotency key collapses to one hour-bucket shared by every
-          // entity, and the second domain of the hour is refused as a
-          // duplicate of the first.
-          entityId,
-          target: entity.canonicalDomain,
-          sampleLimit,
-          operationId,
-        })
-      : { allowed: true, reason: null };
+  const budget = await authorizeCollection(config, {
+    live: provider.name === "live",
+    entityId,
+    target: entity.canonicalDomain,
+    sampleLimit,
+    operationId,
+    now,
+  });
   const reservationId = budget.reservationId ?? null;
   if (!budget.allowed) {
     return emptyResult(
@@ -185,28 +253,7 @@ export async function refreshBacklinks(
     noBaseline: previousSnapshot === undefined,
   });
 
-  // THE RESERVATION IS CLOSED EITHER WAY, and how it closes is the point.
-  //
-  // A provider that answered is charged, so the reservation commits for what it
-  // actually cost — including when that exceeds the estimate, which is how the
-  // Backlinks overrun (79 236 µUSD against 25 000) becomes visible instead of
-  // being truncated. A provider that failed without cost gives its capacity
-  // back. A cost nobody reported keeps holding capacity, because the call may
-  // still have been charged.
-  if (reservationId) {
-    if (collected.providerOk || collected.actualCostMicros > 0) {
-      await commitReservation(reservationId, {
-        actualCostMicros:
-          collected.costStatus === "not_reported"
-            ? null
-            : collected.actualCostMicros,
-        costStatus: collected.costStatus ?? "reported",
-        now,
-      });
-    } else {
-      await releaseReservation(reservationId, "PROVIDER_FAILED_NO_COST", now);
-    }
-  }
+  await closeReservation(reservationId, collected, now);
 
   if (!collected.providerOk) {
     // A live failure explains itself once, sanitized, at the boundary that knew

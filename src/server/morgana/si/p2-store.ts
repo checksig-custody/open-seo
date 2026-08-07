@@ -254,6 +254,21 @@ export async function updateTrackedKeyword(
 export async function dueKeywords(
   limit: number,
   now: Date = new Date(),
+  /**
+   * Buy these keywords and no others.
+   *
+   * Priority order is the right DEFAULT policy and the wrong one for a single
+   * authorised purchase: the watchlist holds keywords whose search volume is
+   * unknown, and priority alone will happily spend on them. `critical` says
+   * "this matters to the brand"; it does not say "a measurement of it can be
+   * weighted by anything". An operator closing a specific coverage gap needs to
+   * name the keywords, exactly as `keyword-volume-refresh` already allows.
+   *
+   * Narrowing only: a named keyword must still be tracking-enabled and due, so
+   * this cannot be used to bypass the cadence or to re-buy something already
+   * collected today.
+   */
+  onlyIds?: readonly string[],
 ): Promise<TrackedKeywordRow[]> {
   const rows = await db
     .select()
@@ -265,7 +280,9 @@ export async function dueKeywords(
     normal: 2,
     low: 3,
   };
+  const wanted = onlyIds && onlyIds.length > 0 ? new Set(onlyIds) : null;
   return rows
+    .filter((r) => wanted === null || wanted.has(r.id))
     .filter(
       (r) =>
         !r.nextCheckAt || new Date(r.nextCheckAt).getTime() <= now.getTime(),

@@ -30,7 +30,7 @@ vi.mock("@/server/lib/dataforseo/client", () => ({
 
 const { collectLiveBacklinks, DEFAULT_SAMPLE_LIMIT } =
   await import("./backlink-live-collector");
-const { createLiveBacklinkProvider, DEFAULT_LIMITS } =
+const { createLiveBacklinkProvider, DEFAULT_LIMITS, mergeLimits } =
   await import("./backlink-provider");
 
 const billing = (costUsd: number, path: string[]) => ({ path, costUsd });
@@ -373,6 +373,78 @@ describe("the provider adapter", () => {
       limits: DEFAULT_LIMITS,
     });
     expect(result.datasetCoverage).toBeNull();
+  });
+
+  /**
+   * THE DEFECT THIS SECTION EXISTS FOR, found in production on 2026-08-07.
+   *
+   * The HTTP route builds `{backlinks: num(body.backlink_limit) ?? undefined,
+   * …}` and the service spread it over the defaults. A spread does not skip an
+   * explicit `undefined` — it assigns it — so a request with no limits (the
+   * normal case) erased all three defaults and `Math.min(undefined, …)` became
+   * NaN. The Conio snapshot landed with a null `sample_limit` and the signature
+   * `live|NaN|subdomains=on|status=live|internal=excluded`, which compares
+   * unequal to CheckSig's and would have made the two profiles incomparable.
+   *
+   * Every existing test above passes a COMPLETE `DEFAULT_LIMITS`, which is
+   * exactly why none of them caught it.
+   */
+  it("keeps the defaults when the caller specifies no limits at all", async () => {
+    const provider = createLiveBacklinkProvider();
+    const result = await provider.collect({
+      target: "checksig.com",
+      // Precisely what the route sends for an empty request body.
+      limits: mergeLimits({
+        backlinks: undefined,
+        referringDomains: undefined,
+        anchors: undefined,
+      }),
+    });
+    expect(result.sampleLimit).toBe(DEFAULT_SAMPLE_LIMIT);
+    expect(result.datasetSignature).toBe(
+      "live|100|subdomains=on|status=live|internal=excluded",
+    );
+  });
+
+  it("never writes a signature containing NaN", async () => {
+    const provider = createLiveBacklinkProvider();
+    for (const limits of [
+      mergeLimits(undefined),
+      mergeLimits({ backlinks: Number.NaN }),
+      mergeLimits({ backlinks: 0, referringDomains: -5 }),
+    ]) {
+      const result = await provider.collect({
+        target: "checksig.com",
+        limits,
+      });
+      expect(Number.isFinite(result.sampleLimit)).toBe(true);
+      expect(result.datasetSignature).not.toContain("NaN");
+    }
+  });
+});
+
+describe("merging caller limits", () => {
+  it("ignores an absent override rather than assigning it", () => {
+    expect(mergeLimits({ backlinks: undefined })).toEqual(DEFAULT_LIMITS);
+    expect(mergeLimits(undefined)).toEqual(DEFAULT_LIMITS);
+  });
+
+  it("accepts a real override", () => {
+    expect(mergeLimits({ backlinks: 50 }).backlinks).toBe(50);
+  });
+
+  it("rejects values that are not a usable count", () => {
+    // Zero, negative and NaN are not "collect nothing" — they are a caller
+    // that failed to state a limit, and the default is the honest reading.
+    expect(mergeLimits({ backlinks: 0 }).backlinks).toBe(
+      DEFAULT_LIMITS.backlinks,
+    );
+    expect(mergeLimits({ backlinks: -1 }).backlinks).toBe(
+      DEFAULT_LIMITS.backlinks,
+    );
+    expect(mergeLimits({ backlinks: Number.NaN }).backlinks).toBe(
+      DEFAULT_LIMITS.backlinks,
+    );
   });
 });
 

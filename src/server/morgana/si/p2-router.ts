@@ -331,9 +331,20 @@ async function dispatchP2Operations(
 
   if (route === "rank-tick" && method === "POST") {
     const body = await readJson(request);
+    // Optional, and narrowing only: name the keywords a paid submission may buy
+    // instead of taking whatever priority order offers. Priority alone will
+    // spend on a keyword whose search volume is unknown, which is money bought
+    // for a measurement nothing can weight.
+    const trackedKeywordIds = Array.isArray(body.tracked_keyword_ids)
+      ? body.tracked_keyword_ids.flatMap((id: unknown) => {
+          const value = str(id);
+          return value ? [value] : [];
+        })
+      : undefined;
     const result = await p2service.runRankTick(config, env, {
       limit: num(body.limit) ?? 5,
       collectLimit: num(body.collect_limit) ?? 10,
+      trackedKeywordIds,
     });
     return json(envelope(config, result, { providerStatus }));
   }

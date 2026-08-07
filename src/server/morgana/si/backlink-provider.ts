@@ -116,6 +116,40 @@ export const DEFAULT_LIMITS: CollectionLimits = {
 };
 
 /**
+ * Apply a caller's partial overrides without letting an absent one win.
+ *
+ * `{...DEFAULT_LIMITS, ...{backlinks: undefined}}` yields `backlinks:
+ * undefined` — a spread does not skip explicit `undefined`, it assigns it. The
+ * HTTP route builds exactly that object (`num(body.backlink_limit) ??
+ * undefined`), so a request that specified no limits ERASED all three defaults,
+ * and `Math.min(undefined, …)` became `NaN`. That NaN reached the provider as
+ * the row limit, the snapshot as its `sample_limit`, and the dataset signature
+ * as the literal text `live|NaN|…` — which silently makes two snapshots
+ * incomparable, since comparability is decided by signature equality.
+ *
+ * Only a finite, positive number may override a default. Anything else means
+ * "not specified".
+ */
+function usableCount(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
+export function mergeLimits(
+  overrides: Partial<CollectionLimits> | undefined,
+): CollectionLimits {
+  return {
+    backlinks: usableCount(overrides?.backlinks, DEFAULT_LIMITS.backlinks),
+    referringDomains: usableCount(
+      overrides?.referringDomains,
+      DEFAULT_LIMITS.referringDomains,
+    ),
+    anchors: usableCount(overrides?.anchors, DEFAULT_LIMITS.anchors),
+  };
+}
+
+/**
  * How many rows this collection will actually ask for.
  *
  * The smaller of what the caller wanted and what this collector will pay for.
@@ -124,13 +158,21 @@ export const DEFAULT_LIMITS: CollectionLimits = {
  * records the sample the estimate assumed. Cost scales with returned rows, so
  * a reservation stating a different sample from the one that was bought would
  * be worse than one stating none.
+ *
+ * It cannot return a non-finite number. A sample limit is used to build the
+ * dataset signature, and a poisoned signature is worse than a missing one:
+ * nothing downstream would notice, and two profiles that asked the same
+ * question would be reported as having asked different ones.
  */
 export function effectiveSampleLimit(limits: CollectionLimits): number {
-  return Math.min(
+  const resolved = Math.min(
     limits.backlinks,
     limits.referringDomains,
     DEFAULT_SAMPLE_LIMIT,
   );
+  return Number.isFinite(resolved) && resolved > 0
+    ? resolved
+    : DEFAULT_SAMPLE_LIMIT;
 }
 
 export interface BacklinkProvider {
@@ -448,7 +490,15 @@ export function createLiveBacklinkProvider(): BacklinkProvider {
           reported === null || reported === 0
             ? null
             : Math.min(1, sampled / reported),
-        datasetSignature: `live|${String(outcome.sampleLimit)}|subdomains=on|status=live|internal=excluded`,
+        // COMPARABILITY IS DECIDED BY THIS STRING, so it may never be built
+        // from a value that is not a number. A signature reading `live|NaN|…`
+        // compares unequal to every other signature including its own kind,
+        // and nothing downstream can tell that from a genuine change of
+        // question. Null says "this run cannot be compared"; a poisoned string
+        // says nothing and is believed.
+        datasetSignature: Number.isFinite(outcome.sampleLimit)
+          ? `live|${String(outcome.sampleLimit)}|subdomains=on|status=live|internal=excluded`
+          : null,
         costStatus: outcome.accounting.costStatus,
         providerReportedCostMicros: outcome.accounting.actualCostMicros,
         failure: null,
