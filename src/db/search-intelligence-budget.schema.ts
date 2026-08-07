@@ -51,10 +51,31 @@ export const siBudgetReservations = sqliteTable(
         "released",
         "expired",
         "reconciliation_pending",
+        /** Resolved against provider evidence by a named human. */
+        "resolved",
       ],
     })
       .notNull()
       .default("reserved"),
+    /**
+     * THE EXIT FROM `reconciliation_pending`, and what it cost to take it.
+     *
+     * Separate from `actual_cost_micros` on purpose: that column is what the
+     * provider reported at the time, and overwriting it would erase the
+     * difference between "the provider said" and "a human went and checked".
+     * A reconciliation is a second, later observation, and it should read as
+     * one.
+     *
+     * `resolution_evidence` is what the figure rests on — an invoice line, a
+     * dashboard export, a support ticket. `resolveReservation` refuses without
+     * it, which is the entire reason the column exists: a reconciliation with
+     * no source is a guess wearing a timestamp.
+     */
+    resolvedCostMicros: integer("resolved_cost_micros"),
+    resolutionEvidence: text("resolution_evidence"),
+    /** Opaque actor reference; never an email. */
+    resolvedBy: text("resolved_by"),
+    resolvedAt: text("resolved_at"),
     /** Resolved once by the authority, so a row and a ledger cannot disagree. */
     budgetDay: text("budget_day").notNull(),
     budgetMonth: text("budget_month").notNull(),

@@ -85,6 +85,7 @@ export async function runLiveDomainRefresh(input: {
     for (const call of collected.calls) {
       await ledger.recordUsage({
         day: snapshotDate,
+        costCentre: "domain_overview",
         entityId: entity.id,
         // The correlation id: these rows belong to this job and can be summed
         // back to it without guessing from a timestamp.
@@ -171,6 +172,7 @@ export async function runLiveDomainRefresh(input: {
     if (failure.origin === "provider") {
       await ledger.recordUsage({
         day: snapshotDate,
+        costCentre: "domain_overview",
         entityId: entity.id,
         jobId,
         endpointPath: failedCall.endpointPath,

@@ -194,6 +194,7 @@ describe("fixture refusal in the rank tick", () => {
     vi.mocked(collectReadyRankTasks).mockResolvedValue({
       collected: 0,
       pending: 0,
+      recoveryPending: 0,
       failed: 0,
       observations: 0,
       keywordsTouched: [],
@@ -230,6 +231,7 @@ describe("fixture refusal in the rank tick", () => {
 const collectResult = (over: Record<string, unknown> = {}) => ({
   collected: 0,
   pending: 0,
+  recoveryPending: 0,
   failed: 0,
   observations: 0,
   keywordsTouched: [] as string[],

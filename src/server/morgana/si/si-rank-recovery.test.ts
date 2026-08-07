@@ -207,6 +207,118 @@ describe("explicit recovery", () => {
     expect(markFailed).not.toHaveBeenCalled();
   });
 
+  it("leaves a parked row parked when the provider is still working", async () => {
+    // `markWaiting` sets `waiting` and increments the attempt count, and the
+    // automatic sweep selects `waiting` — so recovering a still-pending
+    // `recovery_pending` task used to push it back into the sweep, where the
+    // next tick immediately re-hit the cap and parked it again. Each cycle
+    // burned a free `task_get` and a ledger row, and defeated the parked state.
+    taskById.mockResolvedValue(exhausted);
+    fetchQueuedSerpItems.mockResolvedValue({ status: "pending" });
+    await recoverRankTask({
+      taskId: TASK.id,
+      entities: [ENTITY],
+      day: "2026-08-06",
+    });
+    expect(markWaiting).not.toHaveBeenCalled();
+  });
+
+  it("does resume a task that was merely waiting, not parked", async () => {
+    // The guard is about the parked state specifically. An ordinary waiting row
+    // still gets its backoff refreshed.
+    taskById.mockResolvedValue({
+      ...exhausted,
+      status: "waiting",
+      attemptCount: 2,
+    });
+    fetchQueuedSerpItems.mockResolvedValue({ status: "pending" });
+    await recoverRankTask({
+      taskId: TASK.id,
+      entities: [ENTITY],
+      day: "2026-08-06",
+    });
+    expect(markWaiting).toHaveBeenCalled();
+  });
+
+  /**
+   * The two paths share `collectOneTask` and differ only by whether the attempt
+   * cap applies. This is the property that keeps that true: the same provider
+   * payload must mean the same thing to both.
+   */
+  it("reads an unreachable provider the same way the sweep does", async () => {
+    taskById.mockResolvedValue(exhausted);
+    fetchQueuedSerpItems.mockRejectedValue(
+      Object.assign(new Error("upstream"), {
+        name: "AppError",
+        code: "INTERNAL_ERROR",
+      }),
+    );
+    const outcome = await recoverRankTask({
+      taskId: TASK.id,
+      entities: [ENTITY],
+      day: "2026-08-06",
+    });
+    // Not a provider verdict on either path, so not terminal on either path.
+    expect(outcome.status).toBe("pending");
+    expect(outcome.reason).toBe("provider_unreachable");
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  it("reads a provider verdict the same way the sweep does", async () => {
+    taskById.mockResolvedValue(exhausted);
+    fetchQueuedSerpItems.mockResolvedValue({
+      status: "failed",
+      statusCode: 40201,
+      message: "whatever the provider said",
+    });
+    const outcome = await recoverRankTask({
+      taskId: TASK.id,
+      entities: [ENTITY],
+      day: "2026-08-06",
+    });
+    expect(outcome.status).toBe("failed");
+    expect(markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "DATAFORSEO_TASK_FAILED" }),
+    );
+  });
+
+  it("reads an expired task the same way the sweep does", async () => {
+    taskById.mockResolvedValue(exhausted);
+    fetchQueuedSerpItems.mockResolvedValue({
+      status: "failed",
+      statusCode: 40100,
+      message: "Task Not Found",
+    });
+    const outcome = await recoverRankTask({
+      taskId: TASK.id,
+      entities: [ENTITY],
+      day: "2026-08-06",
+    });
+    expect(outcome.status).toBe("expired");
+    expect(markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "DATAFORSEO_TASK_EXPIRED" }),
+    );
+  });
+
+  it("never submits, whatever the provider says", async () => {
+    // Collection cannot reach `task_post` however it is invoked — the only
+    // provider call in this file is a `task_get` against a stored receipt.
+    for (const response of [
+      { status: "pending" },
+      { status: "failed", statusCode: 40201, message: "x" },
+      { status: "failed", statusCode: 40100, message: "x" },
+    ]) {
+      taskById.mockResolvedValue(exhausted);
+      fetchQueuedSerpItems.mockResolvedValue(response);
+      await recoverRankTask({
+        taskId: TASK.id,
+        entities: [ENTITY],
+        day: "2026-08-06",
+      });
+    }
+    expect(postRankCheckTasks).not.toHaveBeenCalled();
+  });
+
   it("says so when the task id is unknown", async () => {
     taskById.mockResolvedValue(null);
     const outcome = await recoverRankTask({

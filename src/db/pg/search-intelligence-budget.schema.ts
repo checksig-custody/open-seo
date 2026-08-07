@@ -28,10 +28,15 @@ export const siBudgetReservations = pgTable(
         "released",
         "expired",
         "reconciliation_pending",
+        "resolved",
       ],
     })
       .notNull()
       .default("reserved"),
+    resolvedCostMicros: integer("resolved_cost_micros"),
+    resolutionEvidence: text("resolution_evidence"),
+    resolvedBy: text("resolved_by"),
+    resolvedAt: text("resolved_at"),
     budgetDay: text("budget_day").notNull(),
     budgetMonth: text("budget_month").notNull(),
     createdAt: text("created_at").notNull(),

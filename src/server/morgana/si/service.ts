@@ -204,6 +204,7 @@ export async function refreshEntity(
     });
     await ledger.recordUsage({
       day: snapshotDate,
+      costCentre: "domain_overview",
       entityId: entity.id,
       jobId: job.id,
       endpointPath: "fixture/domain_overview",
@@ -269,6 +270,7 @@ export async function refreshEntity(
   if (!decision.allowed) {
     await ledger.recordUsage({
       day: snapshotDate,
+      costCentre: "domain_overview",
       entityId: entity.id,
       jobId: job.id,
       endpointPath: "dataforseo_labs/google/domain_rank_overview/live",

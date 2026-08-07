@@ -138,6 +138,24 @@ describe("the capability matrix", () => {
     // First-party crawling: nobody was charged. A 0 would read as a measurement.
     expect(byId.get("site_audit")?.lastProviderCostMicros).toBeNull();
   });
+
+  it("reports Site Audit unverified until a crawl has actually completed", () => {
+    // `siteAuditRuns` used to be a count of ALL rows — the only fact in the
+    // readiness model without a provenance filter — so a `queued` run that
+    // never advanced, or a `failed` one, satisfied the gate. The fact now
+    // counts completed first-party crawls that read at least one page, and the
+    // matrix follows it.
+    const noRuns = new Map(
+      capabilityMatrix(config, {
+        ...productionFacts,
+        siteAuditRuns: 0,
+      }).map((c) => [c.id, c]),
+    );
+    expect(noRuns.get("site_audit")?.blockers).toEqual([
+      "no_live_provider_run",
+    ]);
+    expect(noRuns.get("site_audit")?.state).toBe("live_verification_pending");
+  });
 });
 
 /**

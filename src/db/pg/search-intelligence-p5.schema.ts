@@ -57,6 +57,8 @@ export const siSiteAuditRuns = pgTable(
     })
       .notNull()
       .default("queued"),
+    /** Where this run's data came from. See the D1 schema. */
+    source: text("source", { enum: ["first_party_crawl"] }),
     trigger: text("trigger", { enum: ["manual", "scheduled"] })
       .notNull()
       .default("scheduled"),

@@ -294,7 +294,11 @@ describe("collection", () => {
       day: "2026-08-06",
       limit: 5,
     });
-    expect(result.failed).toBe(1);
+    // Counted as recovery-pending, not failed: nothing went wrong at the
+    // provider and the receipt is still good. Reporting it as a failure is what
+    // made an operator believe a paid SERP had been lost.
+    expect(result.recoveryPending).toBe(1);
+    expect(result.failed).toBe(0);
     expect(markRecoveryPending).toHaveBeenCalledWith({
       id: TASK.id,
       endpoint: "v3/serp/google/organic/task_get/advanced",
@@ -338,19 +342,22 @@ describe("collection", () => {
     );
   });
 
-  it("classifies a malformed response as invalid, not as a task failure", async () => {
+  it("classifies a malformed response as invalid, and does not condemn the task", async () => {
+    // A shape we cannot parse says nothing about the SERP. The receipt is still
+    // valid and the task must stay collectable, so this is not terminal — the
+    // attempt cap will park it if it keeps happening.
     collectableTasks.mockResolvedValue([submittedTask]);
     fetchQueuedSerpItems.mockRejectedValue(
       Object.assign(new Error("bad shape"), { name: "ZodError" }),
     );
-    await collectReadyRankTasks({
+    const result = await collectReadyRankTasks({
       entities: [ENTITY],
       day: "2026-08-06",
       limit: 5,
     });
-    expect(markFailed).toHaveBeenCalledWith(
-      expect.objectContaining({ errorCode: "DATAFORSEO_INVALID_RESPONSE" }),
-    );
+    expect(markFailed).not.toHaveBeenCalled();
+    expect(result.pending).toBe(1);
+    expect(markWaiting).toHaveBeenCalled();
   });
 
   it("keeps the receipt when only our own write fails", async () => {

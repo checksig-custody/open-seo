@@ -91,6 +91,9 @@ export async function recordAccounting(input: {
 }): Promise<void> {
   await ledger.recordUsage({
     day: input.day,
+    // SERP spend is ranking spend. It shared this ledger with Domain Overview
+    // and was reported as it for as long as the table had one name.
+    costCentre: "ranking",
     entityId: input.entityId,
     jobId: input.jobId,
     endpointPath: input.endpointPath,

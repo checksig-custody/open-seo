@@ -27,8 +27,18 @@ import { newId, nowIso } from "./ids";
  */
 type CostStatus = "reported" | "zero" | "not_reported";
 
+/**
+ * Which collector is spending. Three of them share this ledger.
+ *
+ * Required, not defaulted: a default would silently attribute the next
+ * collector's money to whichever centre happened to be written first, which is
+ * exactly how ranking spend spent a week reported as Domain Overview.
+ */
+type LedgerCostCentre = "domain_overview" | "ranking" | "keyword_volume";
+
 interface RecordUsageInput {
   day: string;
+  costCentre: LedgerCostCentre;
   entityId?: string | null;
   /**
    * The refresh job that caused this call — the correlation id that lets
@@ -73,6 +83,7 @@ export async function recordUsage(input: RecordUsageInput): Promise<void> {
   const values = {
     id: newId("ul"),
     day: input.day,
+    costCentre: input.costCentre,
     entityId: input.entityId ?? null,
     jobId: input.jobId ?? "",
     endpointPath: input.endpointPath,

@@ -136,7 +136,17 @@ export async function readinessFacts(
       "provider = 'dataforseo' AND is_found = 1 AND rank_group IS NOT NULL",
     ),
     countRows("tracked_keywords", "search_volume IS NOT NULL"),
-    countRows("si_site_audit_runs", "1 = 1"),
+    // A CRAWL THAT FINISHED AND READ SOMETHING — not merely a row.
+    //
+    // This was `1 = 1`, the only fact in this file without a provenance filter,
+    // in a file whose own comment says a row that came from a provider counts
+    // and a fixture does not. So a `queued` run that never advanced, a
+    // half-crawled `running` one, and a `failed` one all satisfied the Site
+    // Audit gate: a bare request with no crawl behind it read as verification.
+    countRows(
+      "si_site_audit_runs",
+      "source = 'first_party_crawl' AND status = 'completed' AND pages_crawled > 0",
+    ),
     countRows("si_backlink_snapshots", "source = 'dataforseo'"),
     countRows(
       "si_backlink_snapshots",
@@ -176,8 +186,11 @@ export async function readinessFacts(
     shareOfSearchComputable: shareStatus === "ok",
     measuredCostMicros: {
       domain_overview: costOf("domain_overview"),
-      ranking: costOf("phase2"),
-      keyword_volume: costOf("phase2"),
+      // Both of these read `phase2` until 2026-08-08 — a collector whose ledger
+      // holds job counters and no money, so it was permanently 0, so both
+      // reported a null cost. Ranking had in fact been paid for six times.
+      ranking: costOf("ranking"),
+      keyword_volume: costOf("keyword_volume"),
       backlinks: costOf("backlinks"),
     },
     overDailyCap: spend.overDailyCap,

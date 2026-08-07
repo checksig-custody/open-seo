@@ -30,6 +30,13 @@ const MAX_COLLECT_ATTEMPTS = 8;
 interface CollectResult {
   collected: number;
   pending: number;
+  /**
+   * Tasks this engine stopped polling, which are waiting for a deliberate
+   * recovery. Counted apart from `failed` because nothing went wrong at the
+   * provider and the receipt is still good — reporting them as failures is
+   * what made a paid SERP look lost.
+   */
+  recoveryPending: number;
   failed: number;
   observations: number;
   keywordsTouched: string[];
@@ -43,7 +50,20 @@ interface CollectResult {
  * polled forever.
  */
 interface OneTaskOutcome {
-  status: "collected" | "pending" | "failed" | "refused";
+  /**
+   * `retry_exhausted` and `expired` are separated from `failed` on purpose.
+   * The first means this engine stopped asking and the receipt is still good;
+   * the second means the provider no longer holds the task and the receipt is
+   * worthless; only `failed` is the provider rejecting the task. Folding all
+   * three into one word made a tick's counters unreadable.
+   */
+  status:
+    | "collected"
+    | "pending"
+    | "retry_exhausted"
+    | "expired"
+    | "failed"
+    | "refused";
   reason: string;
   observations: number;
 }
@@ -98,7 +118,22 @@ async function collectOneTask(input: {
     failed: outcome.status === "failed",
   });
 
-  if (outcome.status === "pending") {
+  // PENDING AND UNAVAILABLE TAKE THE SAME PATH, for the same reason: neither
+  // has learned anything that could condemn the task. "The provider is still
+  // working" and "we could not read the provider" are different facts about
+  // different things — the second is reported with its own reason — but both
+  // leave a valid receipt and a row that must stay collectable.
+  if (outcome.status === "pending" || outcome.status === "unavailable") {
+    const unreachable = outcome.status === "unavailable";
+    if (unreachable) {
+      // Logged even though it is not terminal: a run of these is how a provider
+      // outage looks from here, and silence would make it indistinguishable
+      // from a slow SERP.
+      logRankFailure(
+        { trackedKeywordId: task.trackedKeywordId, taskId: task.id },
+        outcome.failure,
+      );
+    }
     const attempt = task.attemptCount;
     if (
       input.enforceAttemptCap !== false &&
@@ -119,19 +154,57 @@ async function collectOneTask(input: {
         endpoint: TASK_GET_ENDPOINT,
       });
       return {
-        status: "failed",
+        // Its OWN status, not `failed`. Retry exhaustion, a provider verdict
+        // and a persistence error were all reported as `failed`, so a tick's
+        // counters could not tell "we stopped asking" from "the provider said
+        // no" — and the first is recoverable while the second is not.
+        status: "retry_exhausted",
         reason: "DATAFORSEO_COLLECTION_RETRY_EXHAUSTED",
         observations: 0,
       };
     }
-    await tasks.markWaiting({
+    // A ROW ALREADY PARKED STAYS PARKED. `markWaiting` sets `waiting` and
+    // increments the attempt count, and `collectableTasks` selects `waiting` —
+    // so recovering a `recovery_pending` task that is still pending used to
+    // push it back into the automatic sweep, where the very next tick re-hit
+    // the cap and parked it again. Each cycle burned a free `task_get` and a
+    // ledger row, and defeated the whole point of the parked state.
+    if (task.status !== "recovery_pending") {
+      await tasks.markWaiting({
+        id: task.id,
+        nextCheckAt: iso(
+          now,
+          BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)] ?? 600_000,
+        ),
+      });
+    }
+    return {
+      status: "pending",
+      reason: unreachable ? "provider_unreachable" : "provider_not_ready",
+      observations: 0,
+    };
+  }
+
+  if (outcome.status === "expired") {
+    // The provider no longer holds the task, so the receipt is worthless and
+    // re-collecting can never succeed. Terminal, and deliberately its own code:
+    // only a new purchase could recover this keyword.
+    await tasks.markFailed({
       id: task.id,
-      nextCheckAt: iso(
-        now,
-        BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)] ?? 600_000,
-      ),
+      origin: outcome.failure.origin,
+      errorClass: outcome.failure.errorClass,
+      errorCode: outcome.failure.code,
+      endpoint: outcome.failure.endpoint,
     });
-    return { status: "pending", reason: "provider_not_ready", observations: 0 };
+    logRankFailure(
+      { trackedKeywordId: task.trackedKeywordId, taskId: task.id },
+      outcome.failure,
+    );
+    return {
+      status: "expired",
+      reason: outcome.failure.code,
+      observations: 0,
+    };
   }
 
   if (outcome.status === "failed") {
@@ -181,6 +254,12 @@ async function collectOneTask(input: {
       // key and writes nothing. That is the retry being idempotent.
       if (recorded) observations += 1;
     }
+    // `snapshotId` stays null, and that is not an omission. One SERP produces
+    // one snapshot PER TRACKED ENTITY — five here — so a single column on the
+    // task could only ever name one of them, and picking one would invent a
+    // precedence that does not exist. The correlation is already stored the
+    // way round that fits: every snapshot carries `provider_task_id`, so "what
+    // did this task produce" is a query rather than a pointer.
     await tasks.markSucceeded({ id: task.id, snapshotId: null });
     return { status: "collected", reason: "collected", observations };
   } catch (error) {
@@ -214,6 +293,7 @@ export async function collectReadyRankTasks(input: {
   const result: CollectResult = {
     collected: 0,
     pending: 0,
+    recoveryPending: 0,
     failed: 0,
     observations: 0,
     keywordsTouched: [],
@@ -255,7 +335,16 @@ export async function collectReadyRankTasks(input: {
       if (outcome.observations > 0) touched.add(task.trackedKeywordId);
     }
     if (outcome.status === "pending") result.pending += 1;
-    if (outcome.status === "failed" || outcome.status === "refused") {
+    // A task this engine stopped polling is still waiting to be collected, so
+    // it is counted as pending rather than failed: nothing about it went wrong
+    // at the provider, and reporting it as a failure is what made an operator
+    // think a paid SERP had been lost.
+    if (outcome.status === "retry_exhausted") result.recoveryPending += 1;
+    if (
+      outcome.status === "failed" ||
+      outcome.status === "expired" ||
+      outcome.status === "refused"
+    ) {
       result.failed += 1;
     }
   }
@@ -280,7 +369,7 @@ export async function recoverRankTask(input: {
   day: string;
   now?: Date;
 }): Promise<{
-  status: "collected" | "pending" | "failed" | "refused";
+  status: OneTaskOutcome["status"];
   reason: string;
   observations: number;
   trackedKeywordId: string | null;

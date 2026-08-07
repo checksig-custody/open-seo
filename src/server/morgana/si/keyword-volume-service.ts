@@ -147,6 +147,7 @@ export async function refreshKeywordVolumes(
   // never the record of the money.
   await ledger.recordUsage({
     day: window,
+    costCentre: "keyword_volume",
     entityId: "keyword_volume",
     jobId: null,
     endpointPath:

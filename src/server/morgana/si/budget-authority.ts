@@ -55,17 +55,38 @@ import { newId } from "./ids";
  */
 const LEDGERS = [
   {
-    name: "domain_overview",
+    name: "shared",
     read: (period: string) => sumLedger(searchUsageLedger, period),
   },
   {
-    name: "phase2",
+    name: "phase2_jobs",
     read: (period: string) => sumLedger(phase2UsageLedger, period),
   },
   {
     name: "backlinks",
     read: (period: string) => sumLedger(siBacklinkUsageLedger, period),
   },
+] as const;
+
+/**
+ * The collectors reported inside `search_usage_ledger`.
+ *
+ * THREE OF THEM SHARE ONE TABLE — the phase-1 Domain Overview collector, SERP
+ * ranking and Keyword Volume — and reading it as a whole reported every
+ * micro-USD of all three under the first name anyone gave it. Ranking spend was
+ * attributed to a collector that had not made the call, and ranking itself
+ * showed a null cost while demonstrably having been paid for.
+ *
+ * `unattributed` is a real bucket, not a fallback: a row written before the
+ * cost centre existed, or by a future caller that forgets to label itself, is
+ * reported as unattributed rather than folded into a collector that may not
+ * have spent it.
+ */
+const SHARED_LEDGER_CENTRES = [
+  "domain_overview",
+  "ranking",
+  "keyword_volume",
+  "unattributed",
 ] as const;
 
 /**
@@ -111,8 +132,54 @@ async function sumLedger(
   };
 }
 
+/**
+ * Break the shared ledger into its collectors, in ONE grouped read.
+ *
+ * Grouped rather than one filtered query per centre, for the property as much as
+ * the round trips: a `GROUP BY` over the same rows the total is summed from
+ * cannot disagree with that total. Independent `WHERE` clauses could — one typo
+ * in a predicate and money silently belongs to nobody — and the whole point of
+ * this change is that relabelling must not be able to alter an amount.
+ *
+ * Reported for display only. `globalSpend` still sums the TABLES for the cap.
+ */
+async function sharedLedgerByCentre(
+  period: string,
+): Promise<{ collector: string; actualMicros: number; requests: number }[]> {
+  const isMonth = period.length === 7;
+  const rows = await db
+    .select({
+      centre: searchUsageLedger.costCentre,
+      actual: sql<number>`COALESCE(SUM(${searchUsageLedger.actualCostMicros}), 0)`,
+      requests: sql<number>`COALESCE(SUM(${searchUsageLedger.meteredRequests}), 0)`,
+    })
+    .from(searchUsageLedger)
+    .where(
+      isMonth
+        ? like(searchUsageLedger.day, `${period}%`)
+        : eq(searchUsageLedger.day, period),
+    )
+    .groupBy(searchUsageLedger.costCentre);
+
+  const byCentre = new Map(
+    rows.map((row) => [
+      row.centre ?? "unattributed",
+      { actualMicros: Number(row.actual), requests: Number(row.requests) },
+    ]),
+  );
+  // Every centre is reported, including the ones that spent nothing: a missing
+  // row and a zero are the same fact here — nobody was charged — and a collector
+  // that vanishes from the report when idle is how "ranking costs nothing"
+  // became believable in the first place.
+  return SHARED_LEDGER_CENTRES.map((collector) => ({
+    collector,
+    actualMicros: byCentre.get(collector)?.actualMicros ?? 0,
+    requests: byCentre.get(collector)?.requests ?? 0,
+  }));
+}
+
 /** Reservations that still hold capacity. */
-const HOLDING_STATUSES = ["reserved", "reconciliation_pending"] as const;
+export const HOLDING_STATUSES = ["reserved", "reconciliation_pending"] as const;
 
 type AuthorizationOutcome =
   | { allowed: true; reservationId: string; remainingDailyMicros: number }
@@ -198,7 +265,13 @@ export async function globalSpend(
   const day = budgetDay(now);
   const month = budgetMonth(now);
 
-  const perCollector = await Promise.all(
+  // THE CAP IS SUMMED FROM THE TABLES; the report is broken out separately.
+  //
+  // Keeping those two apart is what makes the attribution fix incapable of
+  // changing an amount. `dailyActualMicros` is the same `SUM` over the same
+  // three tables it has always been — a cost centre is a label the display
+  // reads, and no relabelling can move the total the cap is compared against.
+  const byLedger = await Promise.all(
     LEDGERS.map(async (ledger) => {
       const totals = await ledger.read(day);
       return {
@@ -212,7 +285,13 @@ export async function globalSpend(
     LEDGERS.map((ledger) => ledger.read(month)),
   );
 
-  const dailyActualMicros = perCollector.reduce(
+  // The shared ledger, broken into the collectors that actually wrote it.
+  const perCollector = [
+    ...(await sharedLedgerByCentre(day)),
+    ...byLedger.filter((row) => row.collector !== "shared"),
+  ];
+
+  const dailyActualMicros = byLedger.reduce(
     (sum, row) => sum + row.actualMicros,
     0,
   );

@@ -260,6 +260,15 @@ export async function markSucceeded(input: {
     .set({
       status: "succeeded",
       snapshotId: input.snapshotId,
+      // A SUCCESS RETRACTS THE FAILURE THAT PRECEDED IT. These fields survived
+      // the transition, so three rows in production sat `succeeded` while still
+      // reporting `error_origin: provider` / `DATAFORSEO_TASK_FAILED` — from a
+      // premature marking that the collection itself then disproved. The task
+      // read model surfaces those fields, so the row was telling an operator
+      // the provider had rejected a SERP it had in fact delivered.
+      errorOrigin: null,
+      errorClass: null,
+      errorCode: null,
       completedAt: timestamp,
       lastCheckedAt: timestamp,
       nextCheckAt: null,

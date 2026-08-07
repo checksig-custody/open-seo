@@ -191,6 +191,10 @@ export const searchUsageLedger = pgTable(
     day: text("day").notNull(),
     entityId: text("entity_id"),
     jobId: text("job_id").notNull().default(""),
+    /** Which collector spent this. See the D1 schema for why it is a label. */
+    costCentre: text("cost_centre", {
+      enum: ["domain_overview", "ranking", "keyword_volume"],
+    }),
     endpointPath: text("endpoint_path").notNull(),
     meteringClass: text("metering_class", {
       enum: [

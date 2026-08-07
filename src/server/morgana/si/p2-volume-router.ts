@@ -2,6 +2,7 @@ import { envelope, json, num, readJson } from "./http";
 import * as keywordVolumes from "./keyword-volume-service";
 import * as p2service from "./p2-service";
 import { expireStaleReservations, globalSpend } from "./budget-authority";
+import { holdingReservations } from "./budget-reservations";
 import * as p2Store from "./p2-store";
 import { capabilityMatrix, evaluateReleaseGate } from "./rollout-readiness";
 import { dryRunSchedule, proposedPolicy } from "./scheduler-dry-run";
@@ -73,6 +74,34 @@ export async function dispatchKeywordVolume(
     const reconciled = await expireStaleReservations();
     const spend = await globalSpend(config);
     return json(envelope(config, { ...spend, reconciled }, { providerStatus }));
+  }
+
+  // Which reservations are holding capacity, and what it would take to settle
+  // them. Free and read-only. `GET budget` reports `reconciliation_pending` as
+  // a bare count, so this is the difference between knowing that something is
+  // stuck and being able to go and unstick it.
+  if (route === "budget/reservations" && method === "GET") {
+    const reservations = await holdingReservations();
+    return json(
+      envelope(
+        config,
+        {
+          reservations,
+          holding_micros: reservations.reduce(
+            (sum, row) => sum + row.estimatedMaxCostMicros,
+            0,
+          ),
+          // Stated rather than implied: a reconciliation needs all three, and
+          // the resolver refuses without them.
+          resolution_requires: [
+            "exact provider-verified cost in micro-USD",
+            "evidence the cost was verified against",
+            "actor",
+          ],
+        },
+        { providerStatus },
+      ),
+    );
   }
 
   // Release readiness: what is built, what a provider has actually served, what

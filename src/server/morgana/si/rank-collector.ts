@@ -4,7 +4,11 @@ import {
   readProviderCost,
   type CollectionAccounting,
 } from "./collection-accounting";
-import { classifyProviderError, type TypedFailure } from "./rank-errors";
+import {
+  classifyProviderError,
+  isTransportFailure,
+  type TypedFailure,
+} from "./rank-errors";
 import {
   normalizeRank,
   type NormalizedRank,
@@ -108,8 +112,37 @@ export async function submitRankTask(input: {
   return { providerTaskId: posted.taskId, accounting, endpoint };
 }
 
+/**
+ * What one collection attempt learned.
+ *
+ * THE SPLIT THAT MATTERS is between `failed` and `unavailable`. Both used to be
+ * `failed`, and the caller made that terminal — so a transient inability to
+ * READ an answer was recorded as DataForSEO's verdict ON the task, the row
+ * became invisible to `collectableTasks`, and a SERP already paid for was
+ * stranded. That happened three times on 2026-08-07, and all three collected
+ * successfully once asked again.
+ *
+ *   pending     — the provider says it is still working. Ask later.
+ *   unavailable — we could not read an answer. We know nothing about the task,
+ *                 the receipt is still good, and this must never be terminal.
+ *   failed      — the provider judged THIS TASK and rejected it. Terminal.
+ *   expired     — the provider no longer holds the task. Terminal, and distinct
+ *                 because the receipt is now worthless: re-collecting can never
+ *                 succeed, so only a new purchase could.
+ *   completed   — a SERP was read, whether or not anything matched.
+ */
 type CollectOutcome =
   | { status: "pending"; accounting: CollectionAccounting }
+  | {
+      status: "unavailable";
+      failure: TypedFailure;
+      accounting: CollectionAccounting;
+    }
+  | {
+      status: "expired";
+      failure: TypedFailure;
+      accounting: CollectionAccounting;
+    }
   | {
       status: "failed";
       failure: TypedFailure;
@@ -123,6 +156,29 @@ type CollectOutcome =
       noResults: boolean;
       accounting: CollectionAccounting;
     };
+
+/**
+ * Has the provider stopped holding this task?
+ *
+ * DataForSEO keeps a completed task's result for a bounded window and then
+ * discards it; asking afterwards returns "task not found". That is a different
+ * fact from a task it rejected, because the RECEIPT IS NOW WORTHLESS — no
+ * amount of re-collecting can succeed, and only a new purchase could. Recording
+ * both as `TASK_FAILED` left `resumable()` willing to re-fetch a receipt the
+ * provider no longer honours, forever.
+ *
+ * Deliberately a narrow, explicit list. An unrecognised code stays a plain task
+ * failure: inventing an expiry from a code nobody has observed would be the
+ * same guess in the other direction.
+ */
+const EXPIRED_TASK_STATUS_CODES: ReadonlySet<number> = new Set([
+  40100, // Task Not Found
+  40102, // Task Not Found (result already collected or evicted)
+]);
+
+function isExpiredTaskStatus(statusCode: number | null): boolean {
+  return statusCode !== null && EXPIRED_TASK_STATUS_CODES.has(statusCode);
+}
 
 /**
  * Collect a bought SERP and turn it into a ranking.
@@ -160,9 +216,14 @@ export async function collectRankTask(input: {
       taskId: input.providerTaskId,
     });
   } catch (error) {
+    // A THROW MEANS WE NEVER READ AN ANSWER. `fetchQueuedSerpItems` throws when
+    // the response envelope is unusable — a 5xx, a rate limit, a body that will
+    // not parse — none of which is a statement about the task. Classifying this
+    // as a task failure is what stranded three paid SERPs.
+    const failure = classifyProviderError(error, TASK_GET_ENDPOINT);
     return {
-      status: "failed",
-      failure: classifyProviderError(error, TASK_GET_ENDPOINT),
+      status: isTransportFailure(failure) ? "unavailable" : "failed",
+      failure,
       accounting,
     };
   }
@@ -170,14 +231,15 @@ export async function collectRankTask(input: {
   if (outcome.status === "pending") return { status: "pending", accounting };
 
   if (outcome.status === "failed") {
+    // The provider answered ABOUT THIS TASK. Its own status code is the only
+    // thing that says what it decided, so it is carried and nothing else from
+    // the response is.
+    const expired = isExpiredTaskStatus(outcome.statusCode);
     return {
-      status: "failed",
+      status: expired ? "expired" : "failed",
       failure: {
         origin: "provider",
-        // A task DataForSEO itself reports as failed is a different fact from a
-        // transport error, and the task status code is the only thing that says
-        // which — so it is carried, and nothing else from the response is.
-        code: "DATAFORSEO_TASK_FAILED",
+        code: expired ? "DATAFORSEO_TASK_EXPIRED" : "DATAFORSEO_TASK_FAILED",
         errorClass: "DataForSEOTaskStatus",
         message: `task reported status ${String(outcome.statusCode ?? "unknown")}`,
         endpoint: TASK_GET_ENDPOINT,

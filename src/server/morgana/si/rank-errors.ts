@@ -30,6 +30,14 @@ export type RankErrorCode =
   | "DATAFORSEO_TASK_FAILED"
   | "DATAFORSEO_TASK_EXPIRED"
   | "DATAFORSEO_INVALID_RESPONSE"
+  /**
+   * This engine stopped polling. NOT a provider verdict.
+   *
+   * It was already being written into the typed `error_code` column as a bare
+   * string, which is how a value nobody declared ends up in a vocabulary
+   * everything else is checked against.
+   */
+  | "DATAFORSEO_COLLECTION_RETRY_EXHAUSTED"
   | "BUDGET_EXHAUSTED"
   | "DUPLICATE_PENDING_TASK"
   | "LIVE_PROVIDER_DISABLED"
@@ -73,8 +81,33 @@ function codeForProvider(upstream: string): RankErrorCode {
     case "VALIDATION_ERROR":
       return "DATAFORSEO_INVALID_RESPONSE";
     default:
-      return "DATAFORSEO_TASK_FAILED";
+      // NOT `TASK_FAILED`. An unrecognised upstream code — `INTERNAL_ERROR`
+      // above all, which is what `fetchQueuedSerpItems` throws when the
+      // response ENVELOPE is unusable — says we failed to read an answer, not
+      // that DataForSEO judged the task. Claiming the second was wrong in
+      // production on 2026-08-07: three SERPs were recorded as
+      // provider-failed and all three collected successfully afterwards.
+      return "UNCLASSIFIED";
   }
+}
+
+/**
+ * Did we learn anything about the task, or only about the connection?
+ *
+ * The distinction the collector needs: a code in this set means the attempt
+ * told us nothing about the SERP, so the receipt is still good and the row must
+ * stay collectable. Everything else is a statement about the task itself.
+ */
+const TRANSPORT_CODES: ReadonlySet<RankErrorCode> = new Set([
+  "DATAFORSEO_RATE_LIMITED",
+  "DATAFORSEO_UPSTREAM_UNAVAILABLE",
+  "DATAFORSEO_INVALID_RESPONSE",
+  "DATAFORSEO_AUTH_FAILED",
+  "UNCLASSIFIED",
+]);
+
+export function isTransportFailure(failure: TypedFailure): boolean {
+  return TRANSPORT_CODES.has(failure.code);
 }
 
 /**

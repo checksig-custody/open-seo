@@ -31,6 +31,9 @@ const makeDb = () => ({
       // `.limit(1)`, so the object it returns has to be both.
       const thenable = {
         limit: () => Promise.resolve(result),
+        // The shared ledger is read once, GROUPED BY cost centre, so the
+        // breakdown cannot disagree with the total it is derived from.
+        groupBy: () => Promise.resolve(scenario.centreRows),
         then: (resolve: (v: unknown) => unknown) => resolve(result),
       };
       return { where: () => thenable, limit: () => Promise.resolve(result) };
@@ -74,6 +77,12 @@ let scenario = {
   pendingCount: 0,
   exceededCount: 0,
   reservation: null as Record<string, unknown> | null,
+  /** What `GROUP BY cost_centre` returns for the shared ledger. */
+  centreRows: [] as {
+    centre: string | null;
+    actual: number;
+    requests: number;
+  }[],
 };
 
 function currentRows(projection: Record<string, unknown>): unknown[] {
@@ -132,6 +141,10 @@ const {
   budgetDay,
   budgetMonth,
 } = await import("./budget-authority");
+// Reading and settling reservations lives beside the authority, not inside it:
+// one decides whether money may be spent, the other what to do about money that
+// already was.
+const { resolveReservation } = await import("./budget-reservations");
 
 const config = {
   SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED: "true",
@@ -160,24 +173,87 @@ beforeEach(() => {
     pendingCount: 0,
     exceededCount: 0,
     reservation: null,
+    centreRows: [],
   };
 });
 
 describe("the aggregate", () => {
   it("sums every ledger, not one", async () => {
-    // Each of the four ledgers reports the same figure in this double, so the
-    // total proves all four were read rather than one.
+    // Each ledger reports the same figure in this double, so the total proves
+    // all of them were read rather than one.
     scenario.ledgerActual = 30_000;
     const spend = await globalSpend(config);
     // Three ledgers, not four: Site Audit crawls first-party pages and has no
     // cost column at all, so including it would mean inventing money for a
     // subsystem that spends none.
     expect(spend.dailyActualMicros).toBe(90_000);
-    expect(spend.perCollector.map((c) => c.collector)).toEqual([
-      "domain_overview",
-      "phase2",
-      "backlinks",
-    ]);
+  });
+
+  /**
+   * Three collectors write to `search_usage_ledger`, and reading it whole
+   * reported all of their money under one name — so ranking spend was
+   * attributed to Domain Overview and ranking itself showed a null cost while
+   * having been paid for six times.
+   */
+  describe("attributing the shared ledger", () => {
+    it("reports the collectors that actually wrote it", async () => {
+      scenario.ledgerActual = 30_000;
+      scenario.centreRows = [
+        { centre: "domain_overview", actual: 121_320, requests: 6 },
+        { centre: "ranking", actual: 2_400, requests: 10 },
+        { centre: "keyword_volume", actual: 12_840, requests: 1 },
+      ];
+      const spend = await globalSpend(config);
+      const byName = new Map(
+        spend.perCollector.map((c) => [c.collector, c.actualMicros]),
+      );
+      expect(byName.get("ranking")).toBe(2_400);
+      expect(byName.get("keyword_volume")).toBe(12_840);
+      expect(byName.get("domain_overview")).toBe(121_320);
+      expect(byName.get("backlinks")).toBe(30_000);
+    });
+
+    it("reports an idle collector as zero rather than omitting it", async () => {
+      // A collector that disappears from the report when it has spent nothing
+      // is how "ranking costs nothing" became believable.
+      scenario.centreRows = [];
+      const spend = await globalSpend(config);
+      const names = spend.perCollector.map((c) => c.collector);
+      expect(names).toContain("ranking");
+      expect(names).toContain("keyword_volume");
+      expect(names).toContain("unattributed");
+    });
+
+    it("never lets the attribution change the total", async () => {
+      // THE PROPERTY THE WHOLE CHANGE RESTS ON. The cap is summed from the
+      // TABLES; the breakdown is a separate grouped read of the same rows. So
+      // however the labels fall — including not at all — the number the cap is
+      // compared against is untouched.
+      scenario.ledgerActual = 30_000;
+      const unlabelled = await globalSpend(config);
+      scenario.centreRows = [
+        { centre: null, actual: 999_999, requests: 3 },
+        { centre: "ranking", actual: 555, requests: 1 },
+      ];
+      const labelled = await globalSpend(config);
+      expect(labelled.dailyActualMicros).toBe(unlabelled.dailyActualMicros);
+      expect(labelled.availableDailyMicros).toBe(
+        unlabelled.availableDailyMicros,
+      );
+    });
+
+    it("keeps an unlabelled row out of every named collector", async () => {
+      scenario.centreRows = [{ centre: null, actual: 4_200, requests: 2 }];
+      const spend = await globalSpend(config);
+      const byName = new Map(
+        spend.perCollector.map((c) => [c.collector, c.actualMicros]),
+      );
+      // Folding it into a collector would attribute spend to something that may
+      // not have made the call — the exact defect being repaired.
+      expect(byName.get("unattributed")).toBe(4_200);
+      expect(byName.get("domain_overview")).toBe(0);
+      expect(byName.get("ranking")).toBe(0);
+    });
   });
 
   it("shows the overrun instead of clamping it to zero", async () => {
@@ -310,6 +386,94 @@ describe("authorization", () => {
     await authorize(1_000, "no-subject");
     expect(inserted[0]?.subject).toBeNull();
     expect(inserted[0]?.subjectScope).toBeNull();
+  });
+});
+
+/**
+ * `reconciliation_pending` was a terminal state with no exit: a row held its
+ * full worst case forever and counted toward a blocker no waiver may cover.
+ * That creates a standing temptation to make it go away with a plausible
+ * number — the typical price, a sibling call's cost, a zero — and every one of
+ * those would be a measurement invented to clear a gate.
+ *
+ * So the exit exists and is deliberately hard to take.
+ */
+describe("resolving a pending reservation", () => {
+  const good = {
+    reservationId: "br_1",
+    verifiedCostMicros: 600,
+    evidence: "DataForSEO invoice 2026-08, line 14",
+    actor: "ops",
+  };
+
+  beforeEach(() => {
+    scenario.reservation = {
+      id: "br_1",
+      estimatedMaxCostMicros: 3_000,
+      status: "reconciliation_pending",
+    };
+  });
+
+  it("settles it against a verified cost, with evidence and an actor", async () => {
+    const result = await resolveReservation(good);
+    expect(result.resolved).toBe(true);
+    expect(updates[0]).toMatchObject({
+      status: "resolved",
+      resolvedCostMicros: 600,
+      resolvedBy: "ops",
+      resolutionEvidence: "DataForSEO invoice 2026-08, line 14",
+    });
+  });
+
+  it("records the verified figure beside the reported one, not over it", async () => {
+    await resolveReservation(good);
+    // `actual_cost_micros` keeps saying what the provider reported at the time
+    // — nothing, for these rows — and that stays true afterwards. Overwriting
+    // it would erase the difference between "the provider said" and "a human
+    // went and checked".
+    expect(updates[0]).not.toHaveProperty("actualCostMicros");
+    expect(updates[0]).not.toHaveProperty("costStatus");
+  });
+
+  it("refuses without evidence", async () => {
+    const result = await resolveReservation({ ...good, evidence: "   " });
+    expect(result).toEqual({ resolved: false, reason: "evidence_required" });
+    expect(updates).toHaveLength(0);
+  });
+
+  it("refuses without an actor", async () => {
+    const result = await resolveReservation({ ...good, actor: "" });
+    expect(result).toEqual({ resolved: false, reason: "actor_required" });
+    expect(updates).toHaveLength(0);
+  });
+
+  it("refuses a cost that is not an exact integer of micro-USD", async () => {
+    // Micro-USD are integers everywhere in this engine. A float here would be a
+    // rounding decision made silently, on the one number nobody may guess.
+    for (const verifiedCostMicros of [600.5, Number.NaN, -1]) {
+      const result = await resolveReservation({ ...good, verifiedCostMicros });
+      expect(result).toEqual({ resolved: false, reason: "cost_not_verified" });
+    }
+    expect(updates).toHaveLength(0);
+  });
+
+  it("refuses to re-resolve a row that is already settled", async () => {
+    scenario.reservation = {
+      id: "br_1",
+      estimatedMaxCostMicros: 3_000,
+      status: "committed",
+    };
+    const result = await resolveReservation(good);
+    expect(result).toEqual({ resolved: false, reason: "not_pending" });
+    expect(updates).toHaveLength(0);
+  });
+
+  it("accepts a verified zero, which is a measurement", async () => {
+    // "The provider charged nothing for this" is a real finding and the one
+    // zero that may be recorded — because somebody went and read it.
+    const result = await resolveReservation({ ...good, verifiedCostMicros: 0 });
+    expect(result.resolved).toBe(true);
+    expect(updates[0]).toMatchObject({ resolvedCostMicros: 0 });
   });
 });
 

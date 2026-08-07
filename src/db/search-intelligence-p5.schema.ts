@@ -48,6 +48,16 @@ export const siSiteAuditRuns = sqliteTable(
     })
       .notNull()
       .default("queued"),
+    /**
+     * Where this run's data came from.
+     *
+     * Every other capability carries one — `domain_snapshots.source`,
+     * `si_backlink_snapshots.source`, `si_rank_snapshots.provider` — and
+     * readiness filters on it. Site Audit had none, so it inferred "this is
+     * real" from there being no fixture writer: true today, and not checkable,
+     * which is the class of claim this subsystem keeps removing.
+     */
+    source: text("source", { enum: ["first_party_crawl"] }),
     trigger: text("trigger", { enum: ["manual", "scheduled"] })
       .notNull()
       .default("scheduled"),
