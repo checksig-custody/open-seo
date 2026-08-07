@@ -152,6 +152,23 @@ const TASK = {
   collectionWindow: "2026-08-06",
 };
 
+/** A post that was answered and billed, then found to carry no task id. */
+const taskless = (micros: number, costStatus: string) =>
+  Object.assign(new Error("task_post returned no task id"), {
+    name: "DataForSEOTaskPostError",
+    code: "DATAFORSEO_TASK_FAILED",
+    // What the response actually said it cost, read before the failure.
+    accounting: {
+      requests: 1,
+      meteredRequests: 1,
+      paidSubmissions: 1,
+      resultFetchRequests: 0,
+      estimatedCostMicros: micros,
+      actualCostMicros: micros,
+      costStatus,
+    },
+  });
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -315,14 +332,62 @@ describe("reserving before spending", () => {
     postRankCheckTasks.mockRejectedValueOnce(new Error("502 bad gateway"));
     const result = await submitDueRankTask(submitInput());
     expect(result.status).toBe("failed");
-    // `not_reported` is what makes the reservation stay pending rather than
-    // release capacity for money that may already be spent.
+    // Nothing came back to read, so nothing is known. `not_reported` is what
+    // makes the reservation stay pending rather than release capacity for money
+    // that may already be spent.
     expect(commitReservation).toHaveBeenCalledWith(
       "br_test",
       expect.objectContaining({
         actualCostMicros: null,
         costStatus: "not_reported",
       }),
+    );
+  });
+
+  /**
+   * THE 6 000 µUSD THIS TEST EXISTS FOR. On 2026-08-07 two submissions came
+   * back answered but with no task id. `submitRankTask` had already read the
+   * billing block and attached the accounting to the error it threw — and the
+   * handler discarded it and wrote `not_reported`. Two reservations went to
+   * `reconciliation_pending` holding 3 000 µUSD each, a hard and never-waivable
+   * release blocker, and the evidence that could have cleared them was gone.
+   */
+  it("uses the cost the provider stated when a post fails after answering", async () => {
+    postRankCheckTasks.mockRejectedValueOnce(taskless(600, "reported"));
+    const result = await submitDueRankTask(submitInput());
+    expect(result.status).toBe("failed");
+    // A stated cost is a measurement. The reservation closes on it instead of
+    // holding capacity forever.
+    expect(commitReservation).toHaveBeenCalledWith(
+      "br_test",
+      expect.objectContaining({
+        actualCostMicros: 600,
+        costStatus: "reported",
+      }),
+    );
+    expect(recordUsage.mock.calls[0]?.[0].actualCostMicros).toBe(600);
+  });
+
+  it("treats a stated zero as zero, not as unknown", async () => {
+    postRankCheckTasks.mockRejectedValueOnce(taskless(0, "zero"));
+    await submitDueRankTask(submitInput());
+    // "The provider says this cost nothing" and "nobody knows what this cost"
+    // are different facts, and only the second may hold capacity.
+    expect(commitReservation).toHaveBeenCalledWith(
+      "br_test",
+      expect.objectContaining({ actualCostMicros: 0, costStatus: "zero" }),
+    );
+  });
+
+  it("ignores a malformed accounting rather than trusting it", async () => {
+    const bad = { accounting: { costStatus: 42 } };
+    postRankCheckTasks.mockRejectedValueOnce(
+      Object.assign(new Error("boom"), bad),
+    );
+    await submitDueRankTask(submitInput());
+    expect(commitReservation).toHaveBeenCalledWith(
+      "br_test",
+      expect.objectContaining({ costStatus: "not_reported" }),
     );
   });
 

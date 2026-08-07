@@ -46,6 +46,36 @@ export const WORST_CASE_SUBMISSION_MICROS = 3_000;
 /** How long to wait before first asking whether a queued SERP is ready. */
 const FIRST_CHECK_DELAY_MS = 60_000;
 
+/**
+ * The accounting a thrown provider error carries, when it carries one.
+ *
+ * `submitRankTask` reads the billing block before it decides the response is
+ * unusable, so a post that was answered and charged but produced no task id
+ * still knows what it cost. Recovering that here is the difference between a
+ * reservation that closes and one that holds capacity forever.
+ *
+ * Validated rather than asserted: this is data off an `unknown` error, and a
+ * shape that does not match is treated as absent.
+ */
+function isAccounting(value: unknown): value is CollectionAccounting {
+  if (typeof value !== "object" || value === null) return false;
+  const record: Record<string, unknown> = { ...value };
+  return (
+    typeof record.costStatus === "string" &&
+    typeof record.actualCostMicros === "number"
+  );
+}
+
+function accountingFromError(error: unknown): CollectionAccounting | null {
+  if (typeof error !== "object" || error === null) return null;
+  const candidate: unknown = Object.getOwnPropertyDescriptor(
+    error,
+    "accounting",
+  )?.value;
+  // A predicate, not an assertion: the check and the narrowing cannot drift.
+  return isAccounting(candidate) ? candidate : null;
+}
+
 export const iso = (base: Date, deltaMs: number) =>
   new Date(base.getTime() + deltaMs).toISOString();
 
@@ -258,18 +288,32 @@ export async function submitDueRankTask(input: {
     };
   } catch (error) {
     const failure = classifyProviderError(error, TASK_POST_ENDPOINT);
-    // The post may have been charged before it failed, and we cannot see
-    // whether it was. One request is counted with its cost NOT reported, which
-    // keeps it out of the money column while still recording that we asked.
-    const accounting = accountFor(
-      [
-        {
-          endpointPath: TASK_POST_ENDPOINT,
-          cost: { micros: null, status: "not_reported" },
-        },
-      ],
-      { metered: true, paidSubmission: true },
-    );
+    // USE THE COST THE PROVIDER STATED, IF IT STATED ONE.
+    //
+    // `submitRankTask` reads the billing block BEFORE it checks for a task id,
+    // and attaches the resulting accounting to the error it throws — and this
+    // handler used to discard it and substitute `not_reported`. On 2026-08-07
+    // that turned two answered-but-taskless posts into two reservations holding
+    // 3 000 µUSD each in `reconciliation_pending` forever, which is a hard,
+    // never-waivable release blocker, and destroyed the only evidence that
+    // could have cleared them.
+    //
+    // `not_reported` remains the fallback and remains correct for a transport
+    // failure, where nothing came back to read. But a stated cost is a
+    // measurement — including a stated zero — and this engine's rule everywhere
+    // else is that a stated zero is zero while an unstated one is null.
+    const attached = accountingFromError(error);
+    const accounting =
+      attached ??
+      accountFor(
+        [
+          {
+            endpointPath: TASK_POST_ENDPOINT,
+            cost: { micros: null, status: "not_reported" },
+          },
+        ],
+        { metered: true, paidSubmission: true },
+      );
     await recordAccounting({
       day: input.day,
       entityId: input.entity.id,
@@ -279,13 +323,18 @@ export async function submitDueRankTask(input: {
       accounting,
       failed: true,
     });
-    // The post may have been charged before it failed and we cannot see whether
-    // it was, so the cost is `not_reported` — which makes this reservation stay
-    // `reconciliation_pending` and KEEP holding its worst case. Releasing here
-    // would hand back capacity that may already be spent.
+    // Closed with whatever is actually known. A stated cost — including a
+    // stated zero — commits the reservation and releases the capacity it was
+    // holding. An unstated one leaves it `reconciliation_pending`, still
+    // holding its worst case, because the post may have been charged and
+    // releasing capacity for money that was spent is how a cap is exceeded
+    // quietly. `commitReservation` makes that decision from `costStatus`.
     await commitReservation(decision.reservationId, {
-      actualCostMicros: null,
-      costStatus: "not_reported",
+      actualCostMicros:
+        accounting.costStatus === "not_reported"
+          ? null
+          : accounting.actualCostMicros,
+      costStatus: accounting.costStatus,
       now,
     });
     await tasks.markFailed({
