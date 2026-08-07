@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { type Phase0Config } from "../phase0-env";
-import { MIN_RANKING_COVERAGE, type ReadinessFacts } from "./rollout-readiness";
+import { type ReadinessFacts } from "./rollout-readiness";
 
 /**
  * Morgana Search Intelligence — readiness read from the database, not asserted.
@@ -27,6 +27,34 @@ async function countRows(table: string, where: string): Promise<number> {
     // nothing, which is exactly what a zero says here. Throwing would make a
     // read-only diagnostic fail on a partially migrated database.
     return 0;
+  }
+}
+
+/**
+ * Did Share of Search actually produce a number, the last time it was asked?
+ *
+ * READ FROM THE METRIC, NOT RE-DERIVED. A readiness report that recomputes a
+ * metric's own precondition will disagree with it eventually, and did: on
+ * 2026-08-07 a proxy over ALL of history counted three positioned keywords of
+ * six and called the metric computable, while the metric — which weights a
+ * SINGLE day — had two of six that day and refused. Both arithmetics were
+ * right; only one of them was Share of Search.
+ *
+ * So this asks the persisted snapshot what happened. `null` when the metric has
+ * never run, which is a third answer and not a false.
+ */
+async function shareOfSearchStatus(): Promise<string | null> {
+  try {
+    const rows = await db.all<{ status: string }>(
+      sql.raw(
+        `SELECT status FROM share_of_search_snapshots
+         WHERE cluster_id IS NULL
+         ORDER BY calculated_at DESC LIMIT 1`,
+      ),
+    );
+    return rows[0]?.status ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -117,6 +145,8 @@ export async function readinessFacts(
     countRows("si_ai_observations", "source = 'dataforseo'"),
   ]);
 
+  const shareStatus = await shareOfSearchStatus();
+
   const costOf = (collector: string): number | null => {
     const row = spend.perCollector.find((c) => c.collector === collector);
     // 0 means "nothing recorded", which for a provider cost is an absence
@@ -142,11 +172,8 @@ export async function readinessFacts(
     // CAN WE WEIGHT IT? Distinct eligible keywords holding an actual position.
     // Strictly the smaller of the two, and the one Share of Search needs.
     positionCoverage: coverageOf(keywordsPositioned, keywordsWithVolume),
-    // Share of Search needs half the keywords with a known volume to have a
-    // POSITION, which is what the metric itself requires.
-    shareOfSearchComputable:
-      keywordsWithVolume > 0 &&
-      keywordsPositioned / keywordsWithVolume >= MIN_RANKING_COVERAGE,
+    // The metric's own verdict, not a second opinion about it.
+    shareOfSearchComputable: shareStatus === "ok",
     measuredCostMicros: {
       domain_overview: costOf("domain_overview"),
       ranking: costOf("phase2"),
