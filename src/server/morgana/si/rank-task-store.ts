@@ -65,7 +65,7 @@ interface RankTaskIdentity {
  * The task's `entity_id` records which entity's domain drove the request, not
  * which entity the answer is for — the answer is for all of them.
  */
-function rankTaskDedupeKey(identity: RankTaskIdentity): string {
+export function rankTaskDedupeKey(identity: RankTaskIdentity): string {
   return [
     identity.trackedKeywordId,
     identity.collectionWindow,
@@ -341,13 +341,20 @@ export async function markFailed(input: {
 export async function markSkipped(input: {
   id: string;
   errorCode: string;
+  /**
+   * Where the decision came from. Defaults to `collection` because that is
+   * where every skip originated until the SERP path began reserving budget —
+   * and a refusal by the budget authority attributed to "collection" would
+   * send the next reader to the wrong logs entirely.
+   */
+  errorOrigin?: string;
 }): Promise<void> {
   const timestamp = nowIso();
   await db
     .update(siRankTasks)
     .set({
       status: "skipped",
-      errorOrigin: "collection",
+      errorOrigin: input.errorOrigin ?? "collection",
       errorCode: input.errorCode,
       completedAt: timestamp,
       updatedAt: timestamp,

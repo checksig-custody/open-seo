@@ -48,6 +48,14 @@ vi.mock("@/server/lib/dataforseo/client", () => ({
     Promise.resolve({ postRankCheckTasks, fetchQueuedSerpItems }),
 }));
 vi.mock("./ledger-store", () => ({ recordUsage }));
+// Collection is free and never reserves, but it shares a module with the
+// submission path that does. Mocked so this suite does not pull in `@/db`.
+vi.mock("./budget-authority", () => ({
+  authorizePaidOperation: vi.fn(() =>
+    Promise.resolve({ allowed: true, reservationId: "br_test" }),
+  ),
+  commitReservation: vi.fn(),
+}));
 vi.mock("./p2-store", () => ({ recordRank }));
 vi.mock("./rank-task-store", () => ({
   claimRankTask,

@@ -1,7 +1,12 @@
 import { type Phase0Config } from "../phase0-env";
 import { accountFor, type CollectionAccounting } from "./collection-accounting";
 import * as ledger from "./ledger-store";
-import { submitRankTask, TASK_POST_ENDPOINT } from "./rank-collector";
+import {
+  SERP_DEPTH,
+  submitRankTask,
+  TASK_POST_ENDPOINT,
+} from "./rank-collector";
+import { authorizePaidOperation, commitReservation } from "./budget-authority";
 import {
   classifyProviderError,
   failureLine,
@@ -171,6 +176,43 @@ export async function submitDueRankTask(input: {
     };
   }
 
+  // RESERVE, THEN SPEND. The pre-flight above compares the ledger against the
+  // cap, which is a check and not a guard: two ticks reading the same remainder
+  // both proceed, and the overrun is discovered afterwards. That is exactly the
+  // 2026-08-06 incident the budget authority exists to prevent, and until now
+  // only Backlinks actually reserved — the SERP path still merely looked.
+  //
+  // Placed after the duplicate and resumable checks on purpose: neither of
+  // those spends anything, so neither should hold capacity. The dedupe key is
+  // the idempotency key, because it already identifies exactly one purchase —
+  // this keyword, this collection window, this market and device.
+  const decision = await authorizePaidOperation(input.config, {
+    collector: "phase2",
+    operationType: "serp_task_post",
+    worstCaseMicros: WORST_CASE_SUBMISSION_MICROS,
+    idempotencyKey: `serp|${tasks.rankTaskDedupeKey(identity)}`,
+    subject: identity.keyword,
+    subjectScope: SERP_DEPTH,
+    jobId: input.jobId,
+    operationId: claim.task.id,
+    providerConfigured: input.providerStatus !== "not_configured",
+    now,
+  });
+  if (!decision.allowed) {
+    await tasks.markSkipped({
+      id: claim.task.id,
+      errorCode: decision.code,
+      errorOrigin: "budget",
+    });
+    return {
+      status: "refused",
+      taskId: claim.task.id,
+      providerTaskId: null,
+      reason: `LIVE_RANK_NOT_AUTHORIZED:${decision.code}`,
+      accounting: NOTHING,
+    };
+  }
+
   await tasks.markSubmitting(claim.task.id);
   try {
     const submitted = await submitRankTask({
@@ -197,6 +239,14 @@ export async function submitDueRankTask(input: {
       id: claim.task.id,
       providerTaskId: submitted.providerTaskId,
       nextCheckAt: iso(now, FIRST_CHECK_DELAY_MS),
+    });
+    // The ledger now holds the money, so the reservation stops holding capacity
+    // for it. A cost the provider did not report keeps holding it instead —
+    // `commitReservation` decides that, not this call site.
+    await commitReservation(decision.reservationId, {
+      actualCostMicros: submitted.accounting.actualCostMicros,
+      costStatus: submitted.accounting.costStatus,
+      now,
     });
 
     return {
@@ -228,6 +278,15 @@ export async function submitDueRankTask(input: {
       meteringClass: "paid_submission",
       accounting,
       failed: true,
+    });
+    // The post may have been charged before it failed and we cannot see whether
+    // it was, so the cost is `not_reported` — which makes this reservation stay
+    // `reconciliation_pending` and KEEP holding its worst case. Releasing here
+    // would hand back capacity that may already be spent.
+    await commitReservation(decision.reservationId, {
+      actualCostMicros: null,
+      costStatus: "not_reported",
+      now,
     });
     await tasks.markFailed({
       id: claim.task.id,

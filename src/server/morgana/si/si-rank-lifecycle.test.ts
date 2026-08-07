@@ -36,6 +36,25 @@ const markFailed = vi.fn();
 const markSkipped = vi.fn();
 const collectableTasks = vi.fn();
 const resumable = vi.fn();
+const rankTaskDedupeKey = vi.fn(() => "tk_1|2026-08-07|2380|it|desktop|google");
+interface AuthorizeCall {
+  collector: string;
+  operationType: string;
+  worstCaseMicros: number;
+  idempotencyKey: string;
+  subject?: string | null;
+  subjectScope?: number | null;
+  jobId?: string | null;
+  operationId?: string | null;
+}
+const authorizePaidOperation =
+  vi.fn<
+    (
+      config: unknown,
+      input: AuthorizeCall,
+    ) => Promise<{ allowed: boolean; reservationId?: string; code?: string }>
+  >();
+const commitReservation = vi.fn();
 
 vi.mock("@/server/lib/dataforseo/client", () => ({
   loadDataforseoSections: () =>
@@ -43,6 +62,10 @@ vi.mock("@/server/lib/dataforseo/client", () => ({
 }));
 vi.mock("./ledger-store", () => ({ recordUsage }));
 vi.mock("./p2-store", () => ({ recordRank }));
+vi.mock("./budget-authority", () => ({
+  authorizePaidOperation,
+  commitReservation,
+}));
 vi.mock("./rank-task-store", () => ({
   claimRankTask,
   markSubmitting,
@@ -54,6 +77,7 @@ vi.mock("./rank-task-store", () => ({
   markSkipped,
   collectableTasks,
   resumable,
+  rankTaskDedupeKey,
 }));
 
 const { submitDueRankTask, WORST_CASE_SUBMISSION_MICROS } =
@@ -143,6 +167,10 @@ beforeEach(() => {
   recordUsage.mockResolvedValue(undefined);
   recordRank.mockResolvedValue(true);
   collectableTasks.mockResolvedValue([]);
+  authorizePaidOperation.mockResolvedValue({
+    allowed: true,
+    reservationId: "br_test",
+  });
 });
 
 describe("submission", () => {
@@ -226,6 +254,86 @@ describe("submission", () => {
     expect(markFailed).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "DATAFORSEO_RATE_LIMITED" }),
     );
+  });
+});
+
+/**
+ * The SERP path used to CHECK the budget and then spend, which is not a guard:
+ * two ticks reading the same remainder both proceed and the overrun is found
+ * afterwards. That is the 2026-08-06 incident the budget authority exists to
+ * prevent, and until 2026-08-07 only Backlinks actually reserved.
+ */
+describe("reserving before spending", () => {
+  it("holds capacity before the provider is called", async () => {
+    await submitDueRankTask(submitInput());
+    expect(authorizePaidOperation).toHaveBeenCalledTimes(1);
+    const call = authorizePaidOperation.mock.calls[0]?.[1];
+    expect(call).toMatchObject({
+      collector: "phase2",
+      operationType: "serp_task_post",
+      worstCaseMicros: WORST_CASE_SUBMISSION_MICROS,
+      subject: "custodia bitcoin",
+      operationId: "rt_1",
+      jobId: "rj_1",
+    });
+    // The dedupe key already names exactly one purchase — this keyword, this
+    // window, this market and device — so it is the idempotency key too.
+    expect(call?.idempotencyKey).toBe(
+      "serp|tk_1|2026-08-07|2380|it|desktop|google",
+    );
+  });
+
+  it("commits the reservation with what the provider actually charged", async () => {
+    await submitDueRankTask(submitInput());
+    expect(commitReservation).toHaveBeenCalledWith(
+      "br_test",
+      expect.objectContaining({
+        actualCostMicros: 600,
+        costStatus: "reported",
+      }),
+    );
+  });
+
+  it("does not spend when the authority refuses", async () => {
+    authorizePaidOperation.mockResolvedValueOnce({
+      allowed: false,
+      code: "denied_daily_cap",
+    });
+    const result = await submitDueRankTask(submitInput());
+    expect(result.status).toBe("refused");
+    expect(result.reason).toContain("denied_daily_cap");
+    // The point of reserving first: nothing was bought.
+    expect(postRankCheckTasks).not.toHaveBeenCalled();
+    expect(markSubmitting).not.toHaveBeenCalled();
+    // And the refusal is attributed to the budget, not to collection.
+    expect(markSkipped).toHaveBeenCalledWith(
+      expect.objectContaining({ errorOrigin: "budget" }),
+    );
+  });
+
+  it("keeps holding capacity when a failed post may still have been charged", async () => {
+    postRankCheckTasks.mockRejectedValueOnce(new Error("502 bad gateway"));
+    const result = await submitDueRankTask(submitInput());
+    expect(result.status).toBe("failed");
+    // `not_reported` is what makes the reservation stay pending rather than
+    // release capacity for money that may already be spent.
+    expect(commitReservation).toHaveBeenCalledWith(
+      "br_test",
+      expect.objectContaining({
+        actualCostMicros: null,
+        costStatus: "not_reported",
+      }),
+    );
+  });
+
+  it("reserves nothing for a duplicate, which buys nothing", async () => {
+    claimRankTask.mockResolvedValueOnce({
+      outcome: "duplicate",
+      task: { ...TASK, providerTaskId: "provider-task-abc" },
+    });
+    const result = await submitDueRankTask(submitInput());
+    expect(result.status).toBe("duplicate");
+    expect(authorizePaidOperation).not.toHaveBeenCalled();
   });
 });
 

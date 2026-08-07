@@ -44,7 +44,7 @@ export const TASK_GET_ENDPOINT = "v3/serp/google/organic/task_get/advanced";
  * API accepts and the cheapest possible request; it is also enough for the
  * product's question, which is "where on page one, if at all".
  */
-const SERP_DEPTH = 10;
+export const SERP_DEPTH = 10;
 
 interface SubmitOutcome {
   providerTaskId: string;
