@@ -109,6 +109,26 @@ describe("the capability matrix", () => {
     expect(gap?.blockers).toEqual(["blocked_by_budget_day"]);
   });
 
+  it("notices when the competitor collection has actually happened", () => {
+    // This row used to key only off the budget day, so with Conio collected,
+    // persisted and differenced it still reported `no_live_provider_run` — a
+    // capability unable to see its own data.
+    const collected = new Map(
+      capabilityMatrix(config, {
+        ...productionFacts,
+        backlinkCompetitorSnapshots: 1,
+        overDailyCap: false,
+      }).map((c) => [c.id, c]),
+    );
+    const gap = collected.get("backlink_competitor_gap");
+    expect(gap?.liveVerification).toBe("live_verified");
+    expect(gap?.state).toBe("ready_for_activation");
+    expect(gap?.blockers).toEqual([]);
+    // And it stays PARTIAL: two 100-row samples of two much larger indexes are
+    // comparable, not complete.
+    expect(gap?.dataAvailability).toBe("partial");
+  });
+
   it("reports a verified capability with data as ready for a human decision", () => {
     expect(byId.get("keyword_volume")?.state).toBe("ready_for_activation");
     expect(byId.get("domain_overview")?.state).toBe("ready_for_activation");

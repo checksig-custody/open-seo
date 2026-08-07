@@ -265,18 +265,46 @@ export function capabilityMatrix(
       facts.backlinkSnapshotsLive > 0,
       facts.measuredCostMicros.backlinks ?? null,
     ),
+    // THE ROW NEVER ASKED WHETHER THE COLLECTION HAD HAPPENED. It reported
+    // `no_live_provider_run` purely because the day was under its cap — so on
+    // 2026-08-07, with Conio collected, persisted and differenced into 166 gap
+    // rows, it still announced that no provider had ever run. A capability that
+    // cannot notice its own data is the same defect as one that cannot notice
+    // its own coverage, in a different row.
+    //
+    // `partial` and not `sufficient`, deliberately, and it stays partial however
+    // many competitors are added: this gap is built from two 100-row SAMPLES of
+    // profiles holding 1 611 and 11 584 backlinks. The samples are comparable —
+    // same endpoints, same ordering, same filters, same dataset signature — but
+    // 6.2% and 0.9% of two indexes is not a complete picture of either, and
+    // calling it sufficient would invite exactly the conclusion the sampling
+    // note exists to prevent.
     {
       id: "backlink_competitor_gap",
       displayName: "Sampled Competitor Backlink Gap",
       implementation: "implemented",
-      liveVerification: "live_verification_pending",
+      liveVerification:
+        facts.backlinkCompetitorSnapshots > 0
+          ? "live_verified"
+          : "live_verification_pending",
       dataAvailability:
         facts.backlinkCompetitorSnapshots > 0 ? "partial" : "none",
-      state: facts.overDailyCap
-        ? "blocked_by_budget"
-        : "live_verification_pending",
-      blockers: facts.overDailyCap ? [BLOCKER.budgetDay] : [BLOCKER.noLiveRun],
-      nextAllowedAction: "one competitor collection on a budget day with room",
+      state:
+        facts.backlinkCompetitorSnapshots > 0
+          ? "ready_for_activation"
+          : facts.overDailyCap
+            ? "blocked_by_budget"
+            : "live_verification_pending",
+      blockers:
+        facts.backlinkCompetitorSnapshots > 0
+          ? []
+          : facts.overDailyCap
+            ? [BLOCKER.budgetDay]
+            : [BLOCKER.noLiveRun],
+      nextAllowedAction:
+        facts.backlinkCompetitorSnapshots > 0
+          ? "activation decision; the gap is a sample and says so"
+          : "one competitor collection on a budget day with room",
       lastProviderCostMicros: facts.measuredCostMicros.backlinks ?? null,
       ...base,
     },
