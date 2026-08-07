@@ -103,16 +103,25 @@ const SHARED_LEDGER_CENTRES = [
  * it gains a cost column first and this list gains a line — in that order.
  */
 
+/**
+ * A ledger this reader can sum: a real table that carries the three columns.
+ *
+ * An INTERSECTION, not a structural stand-in. The reader used to take an object
+ * shaped like those three columns and then assert it back to `SQLiteTable` for
+ * the `.from()` — which is exactly the kind of assertion that compiles whether
+ * or not the argument is a table at all. Requiring both halves up front says the
+ * same thing without anything unchecked: the ledgers already satisfy it, and
+ * something that is not a table no longer type-checks at the call site.
+ */
+type SummableLedger = SQLiteTable & {
+  actualCostMicros: SQLiteColumn;
+  meteredRequests: SQLiteColumn;
+  day: SQLiteColumn;
+};
+
 /** One ledger's totals over a day (`YYYY-MM-DD`) or a month (`YYYY-MM`). */
 async function sumLedger(
-  // The four ledgers are structurally different table types with the same three
-  // columns this needs. Narrowing to those columns is what lets one reader serve
-  // all of them without erasing the type-checking that matters.
-  table: {
-    actualCostMicros: SQLiteColumn;
-    meteredRequests: SQLiteColumn;
-    day: SQLiteColumn;
-  },
+  table: SummableLedger,
   period: string,
 ): Promise<{ actualMicros: number; requests: number }> {
   const isMonth = period.length === 7;
@@ -121,7 +130,7 @@ async function sumLedger(
       actual: sql<number>`COALESCE(SUM(${table.actualCostMicros}), 0)`,
       requests: sql<number>`COALESCE(SUM(${table.meteredRequests}), 0)`,
     })
-    .from(table as unknown as SQLiteTable)
+    .from(table)
     .where(isMonth ? like(table.day, `${period}%`) : eq(table.day, period));
   const row = rows[0];
   // A SUM over no rows is 0, and that is a real zero: nothing was spent because

@@ -122,6 +122,35 @@ const envFor = (environment: "staging" | "production") => ({
   DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY: "present-but-unusable",
 });
 
+/** The same idea for phase 5: AI visibility on, its live provider off. */
+const aiEnvFor = (environment: "staging" | "production") => ({
+  SEARCH_INTELLIGENCE_ENABLED: "true",
+  SEARCH_INTELLIGENCE_ENVIRONMENT: environment,
+  SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED: "true",
+  SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED: "false",
+  SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED: "false",
+  DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY: "present",
+});
+
+/**
+ * A complete provider context.
+ *
+ * Spelled out rather than asserted into place: the object these cases used to
+ * pass had a `query: {id, text}` shape that `ProviderContext` never declared,
+ * and `as unknown as` made the mismatch compile. The refusal path happens not to
+ * read the context, so nothing failed — which is exactly how a wrong fixture
+ * survives.
+ */
+const aiContext = {
+  queryId: "aq_1",
+  query: "custodia bitcoin",
+  locationCode: 2380,
+  languageCode: "it",
+  primaryDomains: ["checksig.com"],
+  competitorDomains: ["conio.com"],
+  engine: "chat_gpt",
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   getEntity.mockResolvedValue(ENTITY);
@@ -318,24 +347,14 @@ describe("result fetch is gated on a receipt, not on spend authority", () => {
  * acts on, and nothing reading D1 afterwards could tell it from a measurement.
  */
 describe("fixture refusal in AI visibility", () => {
-  const envFor = (environment: "staging" | "production") => ({
-    SEARCH_INTELLIGENCE_ENABLED: "true",
-    SEARCH_INTELLIGENCE_ENVIRONMENT: environment,
-    SEARCH_INTELLIGENCE_AI_VISIBILITY_ENABLED: "true",
-    SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED: "false",
-    SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED: "false",
-    DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY: "present",
-  });
-
   it("refuses to manufacture an AI observation in production", async () => {
     const { observeQuery } = await import("./ai-visibility-provider");
-    const env = envFor("production");
-    const observation = await observeQuery(readPhase0Config(env), env, {
-      query: { id: "aq_1", text: "custodia bitcoin" },
-      engine: "chat_gpt",
-      primaryDomains: ["checksig.com"],
-      competitorDomains: ["conio.com"],
-    } as unknown as Parameters<typeof observeQuery>[2]);
+    const env = aiEnvFor("production");
+    const observation = await observeQuery(
+      readPhase0Config(env),
+      env,
+      aiContext,
+    );
 
     expect(observation.refusalReason).toBe("FIXTURE_IN_PRODUCTION");
     // Null, not false: "we did not look" is not "the model did not mention it".
@@ -346,13 +365,12 @@ describe("fixture refusal in AI visibility", () => {
 
   it("still serves fixtures in staging, which is what they are for", async () => {
     const { observeQuery } = await import("./ai-visibility-provider");
-    const env = envFor("staging");
-    const observation = await observeQuery(readPhase0Config(env), env, {
-      query: { id: "aq_1", text: "custodia bitcoin" },
-      engine: "chat_gpt",
-      primaryDomains: ["checksig.com"],
-      competitorDomains: ["conio.com"],
-    } as unknown as Parameters<typeof observeQuery>[2]);
+    const env = aiEnvFor("staging");
+    const observation = await observeQuery(
+      readPhase0Config(env),
+      env,
+      aiContext,
+    );
 
     expect(observation.source).toBe("fixture");
     expect(observation.refusalReason).not.toBe("FIXTURE_IN_PRODUCTION");

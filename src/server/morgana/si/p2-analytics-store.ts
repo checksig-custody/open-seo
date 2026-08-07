@@ -153,7 +153,7 @@ export async function shareHistory(sinceDate: string) {
     const held = newest.get(key);
     if (!held || row.createdAt >= held.createdAt) newest.set(key, row);
   }
-  return [...newest.values()].sort((a, b) =>
+  return [...newest.values()].toSorted((a, b) =>
     a.snapshotDate.localeCompare(b.snapshotDate),
   );
 }

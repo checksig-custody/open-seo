@@ -15,7 +15,6 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
  * can two callers running at once both get through?
  */
 
-const rows: Record<string, unknown[]> = {};
 const inserted: Record<string, unknown>[] = [];
 const updates: Record<string, unknown>[] = [];
 let insertShouldConflict = false;
@@ -28,15 +27,18 @@ const makeDb = () => ({
     from: () => {
       const result = currentRows(projection);
       // `.where(...)` is sometimes awaited directly and sometimes followed by
-      // `.limit(1)`, so the object it returns has to be both.
-      const thenable = {
+      // `.limit(1)` or `.groupBy(...)`, so what it returns has to be both a
+      // promise and a builder. Built ON a promise rather than as an object with
+      // a hand-written `then`: drizzle's builders are genuinely awaitable, and
+      // imitating that with a bare `then` is the pattern `no-thenable` exists to
+      // catch.
+      const awaitable = Object.assign(Promise.resolve(result), {
         limit: () => Promise.resolve(result),
         // The shared ledger is read once, GROUPED BY cost centre, so the
         // breakdown cannot disagree with the total it is derived from.
         groupBy: () => Promise.resolve(scenario.centreRows),
-        then: (resolve: (v: unknown) => unknown) => resolve(result),
-      };
-      return { where: () => thenable, limit: () => Promise.resolve(result) };
+      });
+      return { where: () => awaitable, limit: () => Promise.resolve(result) };
     },
   }),
   insert: () => ({
@@ -56,10 +58,9 @@ const makeDb = () => ({
     set: (value: Record<string, unknown>) => ({
       where: () => {
         updates.push(value);
-        return {
+        return Object.assign(Promise.resolve(undefined), {
           returning: () => Promise.resolve([{ id: "br_1" }]),
-          then: (resolve: (v: unknown) => unknown) => resolve(undefined),
-        };
+        });
       },
     }),
   }),
@@ -145,12 +146,19 @@ const {
 // one decides whether money may be spent, the other what to do about money that
 // already was.
 const { resolveReservation } = await import("./budget-reservations");
+const { readPhase0Config } = await import("../phase0-env");
 
-const config = {
+// Parsed, not asserted. The caps arrive as USD decimal strings and
+// `readPhase0Config` is what turns them into the integer micro-USD the authority
+// compares against — so a hand-built object cast into place was quietly
+// asserting that conversion had happened. 0.20/2.00 USD are the 200 000 and
+// 2 000 000 µUSD every case below is written against.
+const config = readPhase0Config({
+  SEARCH_INTELLIGENCE_ENABLED: "true",
   SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED: "true",
-  SEO_DATAFORSEO_DAILY_COST_CAP_USD: 200_000,
-  SEO_DATAFORSEO_MONTHLY_COST_CAP_USD: 2_000_000,
-} as unknown as Parameters<typeof globalSpend>[0];
+  SEO_DATAFORSEO_DAILY_COST_CAP_USD: "0.20",
+  SEO_DATAFORSEO_MONTHLY_COST_CAP_USD: "2.00",
+});
 
 const authorize = (worstCaseMicros: number, key = "op-1") =>
   authorizePaidOperation(config, {

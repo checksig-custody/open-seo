@@ -309,11 +309,25 @@ describe("the refresh, end to end", () => {
     // respected on average is not a cap. The figure now comes from the GLOBAL
     // authority — the sum of every ledger — rather than from this collector's
     // own, which is the whole point of the guard.
+    // Every field stated rather than three asserted into place: the guard reads
+    // the caps and the availability as well, and a partial object cast to the
+    // whole type hid which of them the refusal actually turned on.
     vi.mocked(globalSpend).mockResolvedValue({
+      day: "2026-08-06",
+      month: "2026-08",
       dailyActualMicros: 190_000,
       monthlyActualMicros: 190_000,
       openReservationsMicros: 0,
-    } as unknown as Awaited<ReturnType<typeof globalSpend>>);
+      dailyCapMicros: 200_000,
+      monthlyCapMicros: 2_000_000,
+      availableDailyMicros: 10_000,
+      availableMonthlyMicros: 1_810_000,
+      perCollector: [],
+      overDailyCap: false,
+      overMonthlyCap: false,
+      unexpectedSpendDetected: false,
+      reconciliationPending: 0,
+    });
     const result = await run(liveEnv);
     expect(result.status).toBe("refused");
     expect(result.reason).toContain("daily_budget_insufficient");

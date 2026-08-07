@@ -10,6 +10,7 @@ export * from "./telemetry.schema";
 export * from "./search-intelligence.schema";
 export * from "./search-intelligence-p2.schema";
 export * from "./search-intelligence-p3.schema";
+export * from "./search-intelligence-p3-jobs.schema";
 export * from "./search-intelligence-p4.schema";
 // MORGANA LOCAL PATCH (UPSTREAM.md, patch P10).
 export * from "./search-intelligence-p5.schema";

@@ -10,11 +10,8 @@ import {
   normalizeAnchor,
   normalizeBacklinkDomain,
 } from "./backlink-normalize";
-import { aggregateAnchors, classifyAnchor } from "./backlink-anchors";
-import { scoreBacklinkRisk, type RiskResult } from "./backlink-risk";
 import { assessSnapshot, diffSnapshots } from "./backlink-diff";
 import {
-  createFixtureBacklinkProvider,
   createLiveBacklinkProvider,
   effectiveSampleLimit,
   mergeLimits,
@@ -22,17 +19,12 @@ import {
   type BacklinkProvider,
   type CollectionLimits,
 } from "./backlink-provider";
+import { createFixtureBacklinkProvider } from "./backlink-provider-fixture";
 import * as store from "./backlink-store";
-import * as anchorStore from "./backlink-anchor-store";
-import * as findingsStore from "./backlink-findings-store";
 import * as entityStore from "./store";
-import {
-  getBrandProtectionSignals,
-  type BrandProtectionSignals,
-} from "./brand-protection";
 import { newId, nowIso } from "./ids";
-import { buildEvents } from "./backlink-findings";
 import { backlinkBudgetAllows, recordBacklinkUsage } from "./backlink-cost";
+import { deriveBacklinkModels } from "./backlink-derive";
 
 /**
  * Morgana Search Intelligence — phase 3 collection and analysis.
@@ -51,9 +43,6 @@ import { backlinkBudgetAllows, recordBacklinkUsage } from "./backlink-cost";
  * cap before the guard decides — per the phase-3 priority order.
  */
 const RESERVED_FOR_EARLIER_PHASES_USD = 6;
-
-/** Brand tokens the whole phase reasons about. Lowercase, canonical first. */
-const BRAND_TOKENS = ["checksig"] as const;
 
 function today(now = new Date()): string {
   return now.toISOString().slice(0, 10);
@@ -260,16 +249,10 @@ export async function refreshBacklinks(
     // what happened. A fixture provider never fails, so there is nothing to log
     // for it — and the absence of a code is itself informative.
     if (collected.failure) {
-      logBacklinkFailure(
-        { entityId, jobId: null },
-        {
-          origin: collected.failure.origin as "provider",
-          code: collected.failure.code,
-          errorClass: collected.failure.errorClass,
-          message: collected.failure.message,
-          endpoint: collected.failure.endpoint,
-        },
-      );
+      // Passed through, not rebuilt. It is already a `TypedFailure` — the
+      // classifier is the only thing that produces one — and copying it field
+      // by field only existed to hang an assertion off `origin`.
+      logBacklinkFailure({ entityId, jobId: null }, collected.failure);
     }
     // Record the failed pass so the gap in history is visible, then stop. No
     // diff, no events: we learned nothing about what exists.
@@ -370,122 +353,19 @@ export async function refreshBacklinks(
   // `unknown` status a previously-lost link keeps until it is seen again.
   await store.markBacklinksLost(diff.removed.map((item) => item.key));
 
-  // --- referring domains, risk and findings -------------------------------
-  const anchorsByDomain = new Map<string, string[]>();
-  const signalsByDomain = new Map<string, string[]>();
-  for (const upsert of upserts) {
-    const classification = classifyAnchor({
-      anchor: upsert.anchorText,
-      brandTokens: BRAND_TOKENS,
-      sourceRoot: normalizeBacklinkDomain(upsert.normalizedSourceDomain).root,
-      officialRoots: roots,
-    });
-    if (classification.normalized) {
-      const list = anchorsByDomain.get(upsert.normalizedSourceDomain) ?? [];
-      list.push(classification.normalized);
-      anchorsByDomain.set(upsert.normalizedSourceDomain, list);
-    }
-    if (classification.signals.length > 0) {
-      const list = signalsByDomain.get(upsert.normalizedSourceDomain) ?? [];
-      list.push(...classification.signals);
-      signalsByDomain.set(upsert.normalizedSourceDomain, list);
-    }
-  }
-
-  const riskByDomain = new Map<string, RiskResult>();
-  const brandSignalsByDomain = new Map<string, BrandProtectionSignals>();
-  const domainRows: store.UpsertReferringDomainInput[] = [];
-
-  for (const raw of collected.referringDomains) {
-    const normalized = normalizeBacklinkDomain(raw.domain);
-    const brandProtection = await getBrandProtectionSignals(
-      normalized.normalized,
-    );
-    brandSignalsByDomain.set(normalized.normalized, brandProtection);
-    const risk = scoreBacklinkRisk({
-      normalizedDomain: normalized.normalized,
-      domainRoot: normalized.root,
-      tld: normalized.tld,
-      brandTokens: BRAND_TOKENS,
-      officialRoots: roots,
-      anchors: anchorsByDomain.get(normalized.normalized) ?? [],
-      anchorSignals: signalsByDomain.get(normalized.normalized) ?? [],
-      domainRank: raw.domainRank,
-      spamScore: raw.spamScore,
-      firstSeenAt: raw.firstSeen,
-      targetsOwnedDomain: true,
-      brandProtection: brandProtection.hasSignals
-        ? brandProtection.counts
-        : null,
-      now,
-    });
-    riskByDomain.set(normalized.normalized, risk);
-    domainRows.push({
-      entityId,
-      domain: raw.domain,
-      normalizedDomain: normalized.normalized,
-      backlinkCount: raw.backlinkCount,
-      targetPageCount: raw.targetPageCount,
-      domainRank: raw.domainRank,
-      spamScore: raw.spamScore,
-      country: raw.country,
-      tld: normalized.tld,
-      firstSeenAt: raw.firstSeen ?? at,
-      riskScore: risk.score,
-      riskClassification: risk.classification,
-      riskReasons: JSON.stringify(risk.reasons),
-    });
-  }
-  await store.upsertReferringDomains(domainRows);
-
-  // Referring domains follow the same rule as individual links: a domain is
-  // only marked lost from a snapshot complete enough to prove its absence.
-  let lostDomains = 0;
-  if (quality.status === "complete") {
-    const seen = new Set(domainRows.map((row) => row.normalizedDomain));
-    const previouslyActive = await store.listReferringDomains(entityId, {
-      status: "active",
-      limit: 1000,
-    });
-    const gone = previouslyActive
-      .filter((row) => !seen.has(row.normalizedDomain))
-      .map((row) => row.normalizedDomain);
-    lostDomains = await store.markReferringDomainsLost(entityId, gone);
-  }
-
-  // --- anchors ------------------------------------------------------------
-  const aggregates = aggregateAnchors(upserts, (anchor, sourceRoot) =>
-    classifyAnchor({
-      anchor,
-      brandTokens: BRAND_TOKENS,
-      sourceRoot,
-      officialRoots: roots,
-    }),
-  ).slice(0, limits.anchors);
-  await anchorStore.saveAnchorSnapshots(
-    aggregates.map((aggregate) => ({
-      entityId,
-      snapshotDate: today(now),
-      anchorText: aggregate.anchorText,
-      normalizedAnchor: aggregate.normalizedAnchor,
-      category: aggregate.category,
-      backlinkCount: aggregate.backlinkCount,
-      referringDomainCount: aggregate.referringDomainCount,
-      suspiciousSignal: aggregate.suspiciousSignal,
-      firstSeenAt: at,
-    })),
-  );
-
-  // --- events -------------------------------------------------------------
-  const events = buildEvents({
+  const derived = await deriveBacklinkModels({
     entityId,
+    upserts,
+    referringDomains: collected.referringDomains,
+    roots,
+    diff,
+    quality,
+    limits,
     day: today(now),
-    added: diff.added,
-    removed: diff.removed,
-    riskByDomain,
-    brandSignalsByDomain,
+    at,
+    now,
   });
-  const stored = await findingsStore.saveBacklinkEvents(events);
+  const { lostDomains, events: stored } = derived;
 
   await store.saveSnapshot({
     entityId,
@@ -515,7 +395,7 @@ export async function refreshBacklinks(
     comparisonStatus: quality.status,
     comparisonReason: quality.reason,
     backlinksProcessed: upserts.length,
-    domainsProcessed: domainRows.length,
+    domainsProcessed: derived.domainsProcessed,
     provider: collected.provider,
     estimatedCostMicros: collected.estimatedCostMicros,
     actualCostMicros: collected.actualCostMicros,
@@ -528,7 +408,7 @@ export async function refreshBacklinks(
     comparisonStatus: quality.status,
     comparisonReason: quality.reason,
     backlinksProcessed: upserts.length,
-    domainsProcessed: domainRows.length,
+    domainsProcessed: derived.domainsProcessed,
     newBacklinks: diff.added.length,
     lostBacklinks: diff.removed.length,
     eventsDetected: stored.length,

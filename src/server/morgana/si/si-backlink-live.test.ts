@@ -33,6 +33,9 @@ const { collectLiveBacklinks, DEFAULT_SAMPLE_LIMIT } =
 const { createLiveBacklinkProvider, DEFAULT_LIMITS, mergeLimits } =
   await import("./backlink-provider");
 
+/** A billing block that states no cost at all. */
+const noBilling = (path: string[]) => ({ path });
+
 const billing = (costUsd: number, path: string[]) => ({ path, costUsd });
 
 const summaryBilling = billing(0.02, ["v3", "backlinks", "summary", "live"]);
@@ -275,7 +278,6 @@ describe("accounting", () => {
   });
 
   it("reports not_reported only when no call stated a cost at all", async () => {
-    const noBilling = (path: string[]) => ({ path });
     fetchBacklinksSummary.mockResolvedValue({
       data: summary().data,
       billing: noBilling(["v3", "backlinks", "summary", "live"]),
@@ -463,7 +465,9 @@ describe("the cost ceiling", () => {
   });
 
   it("moves with the sample limit, since cost scales with rows", async () => {
-    const { WORST_CASE_BACKLINK_MICROS, DEFAULT_SAMPLE_LIMIT } =
+    // `DEFAULT_SAMPLE_LIMIT` is already bound at module scope; re-importing it
+    // here shadowed that binding and invited the two copies to disagree.
+    const { WORST_CASE_BACKLINK_MICROS } =
       await import("./backlink-live-collector");
     // 100 rows per list bought 79 236 µUSD. Anyone raising the sample without
     // raising the ceiling reintroduces the 2026-08-06 overrun exactly.
