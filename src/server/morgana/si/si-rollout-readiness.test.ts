@@ -76,15 +76,22 @@ describe("the capability matrix", () => {
 
   it("never reports implementation as live verification", () => {
     const ai = byId.get("ai_visibility");
-    expect(ai?.implementation).toBe("implemented");
+    // `partial`, not `implemented`: the read model and routes are real, the
+    // collector that would call DataForSEO is a deliberate stub.
+    expect(ai?.implementation).toBe("partial");
     // Built, and never once served by a provider. Both true, and the second is
     // the one that decides whether anyone may rely on it.
     expect(ai?.liveVerification).toBe("live_verification_pending");
     expect(ai?.state).toBe("live_verification_pending");
   });
 
-  it("names both unknowns for AI visibility, not just 'not ready'", () => {
+  it("names the missing collector FIRST, ahead of the two unknowns", () => {
+    // Order is the point. `provider_entitlement_unverified` and
+    // `provider_cost_unknown` read as "one authorised call away", and acting on
+    // that means arming paid calls and watching nothing happen — the live
+    // branch of `observeQuery` returns a refusal without reaching the provider.
     expect(byId.get("ai_visibility")?.blockers).toEqual([
+      "live_collector_not_implemented",
       "provider_entitlement_unverified",
       "provider_cost_unknown",
     ]);

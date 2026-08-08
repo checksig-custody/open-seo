@@ -35,7 +35,13 @@ interface CapabilityReadiness {
   id: string;
   displayName: string;
   /** Does the code exist and pass its own tests? */
-  implementation: "not_implemented" | "implemented";
+  /**
+   * `partial` is not a hedge: it names the case where the read model, the store
+   * and the routes exist but the collector that would call the provider does
+   * not. AI Visibility is exactly that, and calling it `implemented` implied a
+   * single authorised call would verify it.
+   */
+  implementation: "not_implemented" | "partial" | "implemented";
   /** Has a real provider round trip ever succeeded in production? */
   liveVerification: CapabilityState;
   /** Is there enough stored data for the feature to say anything? */
@@ -115,6 +121,15 @@ const BLOCKER = {
    */
   positions: "insufficient_ranked_positions",
   costUnknown: "provider_cost_unknown",
+  /**
+   * The live provider branch does not exist yet.
+   *
+   * Distinct from the two unknowns beside it, and ordered before them: those
+   * describe things a single authorised call would settle, and this describes
+   * why no such call can be made. Collapsing them cost a session's worth of
+   * planning that assumed a flag flip would do it.
+   */
+  aiCollector: "live_collector_not_implemented",
   entitlement: "provider_entitlement_unverified",
   webhooks: "webhooks_invalid",
   /** Nobody looked. Not the same as "nothing is wrong". */
@@ -334,15 +349,28 @@ export function capabilityMatrix(
     {
       id: "ai_visibility",
       displayName: "AI Visibility",
-      implementation: "implemented",
+      /**
+       * `partial`, and the correction matters more than the word.
+       *
+       * This row said `implemented` and blocked on entitlement and price, which
+       * read as "built, waiting for one authorised call". It is not: the live
+       * branch of `observeQuery` in `ai-visibility-provider.ts` is a deliberate
+       * stub that returns a refusal and never reaches DataForSEO. The read
+       * model, the capability discovery, the store and the routes are all real;
+       * the collector that would call the provider is not.
+       *
+       * So no flag and no budget can verify this capability, and reporting the
+       * two unknowns alone would have sent someone to arm paid calls and watch
+       * nothing happen. `live_collector_not_implemented` is the first blocker
+       * because it is the one that has to be fixed first.
+       */
+      implementation: "partial",
       liveVerification: "live_verification_pending",
       dataAvailability: facts.aiObservationsLive > 0 ? "partial" : "none",
       state: "live_verification_pending",
-      // Two independent unknowns, and neither is "not built": the account's
-      // entitlement and the price. Either alone blocks activation.
-      blockers: [BLOCKER.entitlement, BLOCKER.costUnknown],
+      blockers: [BLOCKER.aiCollector, BLOCKER.entitlement, BLOCKER.costUnknown],
       nextAllowedAction:
-        "one authorised call to settle entitlement and establish the cost",
+        "implement the live collector; the AI Optimization API is reachable and the base task price is published, but the per-call LLM token charge is not",
       lastProviderCostMicros: null,
       ...base,
     },
