@@ -69,6 +69,16 @@ vi.mock("./rank-task-store", () => ({
   collectableTasks,
   resumable,
 }));
+// See the note in `si-rank-lifecycle.test.ts`: the circuit breaker reaches D1
+// and these suites keep the collector graph free of it.
+vi.mock("./provider-circuit", () => ({
+  observeProviderError: vi.fn(async () => ({
+    kind: "none",
+    statusCode: null,
+    sanitizedMessage: null,
+  })),
+  providerBlock: vi.fn(async () => ({ blocked: false })),
+}));
 
 const { collectReadyRankTasks } = await import("./rank-collect-service");
 
