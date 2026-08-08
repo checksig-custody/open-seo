@@ -16,6 +16,7 @@ import { capabilityMatrix, evaluateReleaseGate } from "./rollout-readiness";
 import { dryRunSchedule, proposedPolicy } from "./scheduler-dry-run";
 import { readinessFacts } from "./readiness-facts";
 import * as keywordVolumeStore from "./keyword-volume-store";
+import * as entityStore from "./store";
 import type { SiRequestContext } from "./router";
 
 /**
@@ -208,6 +209,7 @@ export async function dispatchKeywordVolume(
   if (route === "readiness" && method === "GET") {
     const spend = await globalSpend(config);
     const trackedKeywords = await p2Store.listTrackedKeywords();
+    const activeEntities = await entityStore.listEntities();
     const facts = await readinessFacts(config, spend, trackedKeywords.length);
     const matrix = capabilityMatrix(config, facts);
     const gate = evaluateReleaseGate(matrix, facts);
@@ -215,13 +217,17 @@ export async function dispatchKeywordVolume(
       criticalKeywords: trackedKeywords.filter((k) => k.priority === "critical")
         .length,
       highKeywords: trackedKeywords.filter((k) => k.priority === "high").length,
-      entities: facts.domainOverviewSnapshots,
+      normalKeywords: trackedKeywords.filter((k) => k.priority === "normal").length,
+      lowKeywords: trackedKeywords.filter((k) => k.priority === "low").length,
+      entities: activeEntities.length,
     });
     const forecast = dryRunSchedule(
       {
-        criticalKeywords: 0,
-        highKeywords: 0,
-        entities: 0,
+        criticalKeywords: trackedKeywords.filter((k) => k.priority === "critical").length,
+        highKeywords: trackedKeywords.filter((k) => k.priority === "high").length,
+        normalKeywords: trackedKeywords.filter((k) => k.priority === "normal").length,
+        lowKeywords: trackedKeywords.filter((k) => k.priority === "low").length,
+        entities: activeEntities.length,
         policy,
       },
       {
@@ -242,6 +248,7 @@ export async function dispatchKeywordVolume(
             monthly_actual_micros: spend.monthlyActualMicros,
             open_reservations_micros: spend.openReservationsMicros,
             daily_cap_micros: spend.dailyCapMicros,
+            monthly_cap_micros: spend.monthlyCapMicros,
             over_daily_cap: spend.overDailyCap,
             per_collector: spend.perCollector,
             reconciliation_pending: spend.reconciliationPending,

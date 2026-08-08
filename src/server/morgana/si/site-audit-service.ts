@@ -108,6 +108,10 @@ async function selectDueForAudit<
 ): Promise<T[]> {
   return candidates.filter((entity) => {
     if (!entity.enabled) return false;
+    // Budget V2 audits the owned domain only. Competitor collection is limited
+    // to provider-backed visibility/authority data; crawling their sites is
+    // neither required nor part of the operating policy.
+    if (entity.entityType !== "primary") return false;
     const last = lastRunAt.get(entity.id);
     if (!last) return true;
     const dueMs = auditDueAt(entity) * 3600_000;

@@ -26,6 +26,7 @@ export function projectEntity(row: store.SearchEntityRow) {
     language_code: row.languageCode,
     refresh_interval_hours: row.refreshIntervalHours,
     backlink_interval_hours: row.backlinkIntervalHours,
+    last_backlink_refreshed_at: row.lastBacklinkRefreshedAt,
     last_refreshed_at: row.lastRefreshedAt,
     created_at: row.createdAt,
     updated_at: row.updatedAt,

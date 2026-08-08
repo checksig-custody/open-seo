@@ -1,3 +1,10 @@
+import {
+  BACKLINK_FREQUENCY_HOURS,
+  DOMAIN_OVERVIEW_FREQUENCY_HOURS,
+  KEYWORD_VOLUME_FREQUENCY_DAYS,
+  RANK_FREQUENCY_HOURS,
+} from "./scheduler-policy";
+
 /**
  * Morgana Search Intelligence — what the scheduler WOULD do, and what it would
  * cost, without doing any of it.
@@ -45,6 +52,8 @@ interface ScheduledOperation {
 interface DryRunPolicyInput {
   criticalKeywords: number;
   highKeywords: number;
+  normalKeywords?: number;
+  lowKeywords?: number;
   entities: number;
   /** The policy under consideration. Disabled entries are reported, not run. */
   policy: ScheduledOperation[];
@@ -82,23 +91,41 @@ interface DryRunResult {
 export function proposedPolicy(input: {
   criticalKeywords: number;
   highKeywords: number;
+  normalKeywords?: number;
+  lowKeywords?: number;
   entities: number;
 }): ScheduledOperation[] {
+  const normalKeywords = input.normalKeywords ?? 0;
+  const lowKeywords = input.lowKeywords ?? 0;
   return [
     {
       collector: "ranking",
       operation: "serp_task_post_critical",
       // Every 6 hours: 4 runs a day, one paid SERP per keyword.
-      perDay: 4 * input.criticalKeywords,
+      perDay: (24 / RANK_FREQUENCY_HOURS.critical) * input.criticalKeywords,
       worstCaseMicros: MEASURED_COSTS.serp_keyword,
-      enabled: false,
+      enabled: true,
     },
     {
       collector: "ranking",
       operation: "serp_task_post_high",
-      perDay: 1 * input.highKeywords,
+      perDay: (24 / RANK_FREQUENCY_HOURS.high) * input.highKeywords,
       worstCaseMicros: MEASURED_COSTS.serp_keyword,
-      enabled: false,
+      enabled: true,
+    },
+    {
+      collector: "ranking",
+      operation: "serp_task_post_normal",
+      perDay: (24 / RANK_FREQUENCY_HOURS.normal) * normalKeywords,
+      worstCaseMicros: MEASURED_COSTS.serp_keyword,
+      enabled: true,
+    },
+    {
+      collector: "ranking",
+      operation: "serp_task_post_low",
+      perDay: (24 / RANK_FREQUENCY_HOURS.low) * lowKeywords,
+      worstCaseMicros: MEASURED_COSTS.serp_keyword,
+      enabled: true,
     },
     {
       collector: "ranking",
@@ -107,37 +134,37 @@ export function proposedPolicy(input: {
       // the work, not only the money.
       perDay: 72,
       worstCaseMicros: 0,
-      enabled: false,
+      enabled: true,
     },
     {
       collector: "keyword_volume",
       operation: "keyword_overview_batch",
       // Monthly, expressed per day so one sum covers every cadence.
-      perDay: 1 / 30,
+      perDay: 1 / KEYWORD_VOLUME_FREQUENCY_DAYS,
       worstCaseMicros: MEASURED_COSTS.keyword_volume_batch,
-      enabled: false,
+      enabled: true,
     },
     {
       collector: "domain_overview",
       operation: "labs_domain_overview",
-      perDay: input.entities,
+      perDay: input.entities * (24 / DOMAIN_OVERVIEW_FREQUENCY_HOURS),
       // Measured by phase 1: three Labs calls per refresh, ~40 440 µUSD.
       worstCaseMicros: 40_440,
-      enabled: false,
+      enabled: true,
     },
     {
       collector: "site_audit",
       operation: "first_party_crawl",
       perDay: 1 / 7,
       worstCaseMicros: MEASURED_COSTS.site_audit,
-      enabled: false,
+      enabled: true,
     },
     {
       collector: "backlinks",
       operation: "backlink_collection",
-      perDay: 0,
+      perDay: input.entities * (24 / BACKLINK_FREQUENCY_HOURS),
       worstCaseMicros: MEASURED_COSTS.backlink_reservation,
-      enabled: false,
+      enabled: true,
     },
     {
       collector: "ai_visibility",

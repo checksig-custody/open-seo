@@ -214,6 +214,7 @@ export async function refreshEntity(
       status: "succeeded",
       snapshotId: result.snapshotId,
     });
+    await store.markEntityRefreshed(entity.id, "domain_overview", now.toISOString());
     return {
       entityId: entity.id,
       jobId: job.id,
@@ -299,6 +300,7 @@ export async function refreshEntity(
     pageLimit: TOP_PAGE_LIMIT,
     force: input.force ?? false,
   });
+  await store.markEntityRefreshed(entity.id, "domain_overview", now.toISOString());
   return {
     entityId: entity.id,
     jobId: job.id,

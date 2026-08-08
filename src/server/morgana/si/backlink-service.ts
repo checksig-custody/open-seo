@@ -401,6 +401,7 @@ export async function refreshBacklinks(
     actualCostMicros: collected.actualCostMicros,
     operationId,
   });
+  await entityStore.markEntityRefreshed(entityId, "backlinks", now.toISOString());
 
   return {
     entityId,
