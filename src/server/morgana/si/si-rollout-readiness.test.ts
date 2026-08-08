@@ -63,6 +63,11 @@ const productionFacts: ReadinessFacts = {
   reconciliationPending: 0,
   unexpectedSpendDetected: false,
   webhooksInvalid: ["intel", "brand_protection", "security"],
+  // Something looked and found them broken — the case where `webhooks_invalid`
+  // is the right blocker. The engine on its own reports `webhooksEvaluated:
+  // false` instead, and that path has its own test below.
+  webhooksEvaluated: true,
+  providerCircuitState: "healthy",
 };
 
 describe("the capability matrix", () => {

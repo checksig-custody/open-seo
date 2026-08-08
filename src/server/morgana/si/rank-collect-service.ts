@@ -3,6 +3,7 @@ import { collectRankTask, TASK_GET_ENDPOINT } from "./rank-collector";
 import { logRankFailure, persistenceFailure } from "./rank-errors";
 import { iso, recordAccounting } from "./rank-live-service";
 import * as tasks from "./rank-task-store";
+import { providerBlock } from "./provider-circuit";
 import type { SearchEntityRow } from "./store";
 
 /**
@@ -289,7 +290,6 @@ export async function collectReadyRankTasks(input: {
 }): Promise<CollectResult> {
   const now = input.now ?? new Date();
   const byId = new Map(input.entities.map((entity) => [entity.id, entity]));
-  const due = await tasks.collectableTasks(input.limit);
   const result: CollectResult = {
     collected: 0,
     pending: 0,
@@ -298,6 +298,17 @@ export async function collectReadyRankTasks(input: {
     observations: 0,
     keywordsTouched: [],
   };
+
+  // A `task_get` is free, so the budget authority — which is where the account
+  // circuit breaker lives — is never consulted on this path. That is exactly
+  // why the check has to be repeated here: a suspended account will not answer,
+  // and hammering it every twenty minutes from the scheduler is the behaviour
+  // `40201` exists to stop. Nothing is marked failed; the tasks stay collectable
+  // for when the account is usable again, because their receipts are still good.
+  const circuit = await providerBlock();
+  if (circuit.blocked) return result;
+
+  const due = await tasks.collectableTasks(input.limit);
   const touched = new Set<string>();
 
   for (const task of due) {

@@ -7,6 +7,7 @@ import { siBacklinkUsageLedger } from "@/db/search-intelligence-p3.schema";
 import { siBudgetReservations } from "@/db/search-intelligence-budget.schema";
 import { isEnabled, type Phase0Config } from "../phase0-env";
 import { newId } from "./ids";
+import { providerBlock } from "./provider-circuit";
 
 /**
  * Morgana Search Intelligence — the one authority that may allow spending.
@@ -201,7 +202,15 @@ type AuthorizationOutcome =
         | "denied_unexpected_spend"
         | "denied_paid_calls_disabled"
         | "denied_provider_not_configured"
-        | "denied_duplicate_operation";
+        | "denied_duplicate_operation"
+        /**
+         * The provider has said something about the ACCOUNT — suspended,
+         * credential rejected, API not entitled. Distinct from every code above
+         * because none of them is fixed by waiting, by a smaller request or by
+         * a different collector, and because this one must stop the whole
+         * subsystem rather than one operation.
+         */
+        | "denied_provider_account_blocked";
       reason: string;
       /** What the decision was made against, for the diagnostic log. */
       dailySpentMicros: number;
@@ -402,6 +411,17 @@ export async function authorizePaidOperation(
   }
   if (!isEnabled(config.SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED)) {
     return deny("denied_paid_calls_disabled", "paid calls are off", nothing);
+  }
+
+  // THE ACCOUNT-LEVEL CHECK GOES HERE AND ONLY HERE. Every paid operation in
+  // this subsystem — Domain Overview, SERP task_post, Keyword Volume,
+  // Backlinks, AI Visibility — already passes through this function to get a
+  // reservation, which makes it the one place a suspended account can be
+  // stopped without each collector having to remember to ask. It sits before
+  // the reservation insert so a blocked account never takes capacity.
+  const circuit = await providerBlock();
+  if (circuit.blocked) {
+    return deny("denied_provider_account_blocked", circuit.reason, nothing);
   }
 
   const before = await globalSpend(config, { now });

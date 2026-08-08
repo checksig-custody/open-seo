@@ -204,6 +204,20 @@
       "when": 1786099802500,
       "tag": "0028_site_audit_source",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1786099803000,
+      "tag": "0029_rank_task_error_cleanup",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1786099804000,
+      "tag": "0030_provider_circuit",
+      "breakpoints": true
     }
   ]
 }

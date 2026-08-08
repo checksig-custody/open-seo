@@ -72,6 +72,20 @@ vi.mock("./rank-task-store", () => ({
   taskById,
   resumable,
 }));
+// The account circuit breaker reaches D1, and these suites keep the collector
+// module graph free of it deliberately — every db-touching dependency here is
+// mocked so the collector can be exercised outside the Workers runtime. Its own
+// behaviour is pinned in `si-provider-circuit.test.ts`; what matters here is
+// that an unobserved provider does NOT block, which is the production default
+// before the first call.
+vi.mock("./provider-circuit", () => ({
+  observeProviderError: vi.fn(async () => ({
+    kind: "none",
+    statusCode: null,
+    sanitizedMessage: null,
+  })),
+  providerBlock: vi.fn(async () => ({ blocked: false })),
+}));
 
 const { recoverRankTask } = await import("./rank-collect-service");
 

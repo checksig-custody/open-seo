@@ -15,6 +15,7 @@ import {
 import { rankPreflight } from "./rank-preflight";
 import * as tasks from "./rank-task-store";
 import type { SearchEntityRow } from "./store";
+import { observeProviderError } from "./provider-circuit";
 
 /**
  * Morgana Search Intelligence — driving the phase 2 SERP task lifecycle.
@@ -291,6 +292,10 @@ export async function submitDueRankTask(input: {
     };
   } catch (error) {
     const failure = classifyProviderError(error, TASK_POST_ENDPOINT);
+    await observeProviderError(error, {
+      endpoint: TASK_POST_ENDPOINT,
+      operationType: "serp_task_post",
+    });
     // USE THE COST THE PROVIDER STATED, IF IT STATED ONE.
     //
     // `submitRankTask` reads the billing block BEFORE it checks for a task id,

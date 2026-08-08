@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { type Phase0Config } from "../phase0-env";
+import { readProviderState } from "./provider-circuit";
 import { type ReadinessFacts } from "./rollout-readiness";
 
 /**
@@ -108,6 +109,7 @@ export async function readinessFacts(
     backlinkSnapshotsLive,
     backlinkCompetitorSnapshots,
     aiObservationsLive,
+    providerState,
   ] = await Promise.all([
     // `source`/`provider` is the discriminator everywhere: a row that came from
     // a provider counts, a fixture does not.
@@ -153,6 +155,9 @@ export async function readinessFacts(
       "source = 'dataforseo' AND entity_id <> (SELECT id FROM search_entities WHERE entity_type = 'primary' LIMIT 1)",
     ),
     countRows("si_ai_observations", "source = 'dataforseo'"),
+    // The provider's own verdict on the account. Null means never observed,
+    // which the matrix keeps distinct from healthy.
+    readProviderState(),
   ]);
 
   const shareStatus = await shareOfSearchStatus();
@@ -199,20 +204,36 @@ export async function readinessFacts(
     // Read from the parsed config's own diagnostic rather than from the raw
     // values, so no webhook string can reach this object.
     webhooksInvalid: invalidWebhookChannels(config),
+    // Stated, not implied: the engine holds no webhook and did not look.
+    webhooksEvaluated: false,
+    providerCircuitState: providerState?.state ?? null,
   };
 }
 
 /**
- * Which alert channels hold an unusable webhook.
+ * Which alert channels hold an unusable webhook — a question this engine cannot
+ * answer, and now says so.
  *
- * Names only. The engine never sees Morgana's webhook values — they live in
- * Morgana's config — so this reports the channels this deploy knows are
- * unconfigured rather than inspecting anything secret.
+ * WHAT WAS WRONG. This returned all three channels as invalid whenever the
+ * environment was `production`, on the reasoning that alerts were off anyway.
+ * That is not a reading of anything; it is a constant wearing the shape of a
+ * fact, and it became a false one the moment the three webhook secrets were
+ * provisioned in Morgana on 2026-08-08 — the blocker would have stayed shut
+ * forever while the configuration behind it was correct.
+ *
+ * THE ENGINE HAS NO WEBHOOKS. They live in Morgana's config, and Morgana
+ * classifies them in `src/config/webhook-diagnostics.ts` from the RAW
+ * environment, which is the only place the distinction between "absent" and
+ * "present but malformed" still exists. So the honest answer here is the empty
+ * list plus an explicit `webhooksEvaluated: false` on the facts, and the
+ * composite release gate is evaluated by the verifier in Morgana, which can see
+ * both halves.
+ *
+ * A GATE THAT CANNOT SEE A THING MUST NOT REPORT ON IT — in either direction.
+ * `evaluateReleaseGate` therefore emits `webhooks_not_evaluated` rather than
+ * silently dropping the row, so an engine-only reader cannot mistake this for
+ * a clean bill of health.
  */
-function invalidWebhookChannels(config: Phase0Config): string[] {
-  // The engine has no webhook of its own; Morgana owns delivery. What it can
-  // state honestly is that alerts are off, which is why nothing is delivered.
-  return config.SEARCH_INTELLIGENCE_ENVIRONMENT === "production"
-    ? ["intel", "brand_protection", "security"]
-    : [];
+function invalidWebhookChannels(_config: Phase0Config): string[] {
+  return [];
 }

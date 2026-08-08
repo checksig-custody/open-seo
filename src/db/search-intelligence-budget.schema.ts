@@ -101,3 +101,81 @@ export const siBudgetReservations = sqliteTable(
     ),
   ],
 );
+
+/**
+ * The provider's own verdict on our account, latched.
+ *
+ * WHY THIS IS NOT THE EXISTING BREAKER. `si_provider_budget_state` already
+ * carries a circuit breaker: consecutive failures, an opened-at timestamp, and
+ * a cooldown after which it closes itself. That is the right shape for a
+ * provider having a bad ten minutes. It is exactly the wrong shape for
+ * DataForSEO `40201`, which means the ACCOUNT is suspended: no cooldown will
+ * fix it, retrying is pointless, and a breaker that self-heals would resume
+ * hammering a dead account every time the timer expired.
+ *
+ * So this state is LATCHED. Nothing on the automatic path — no tick, no
+ * scheduler, no successful call to a different endpoint — may clear it. The
+ * only exits are in `provider-circuit.ts`: a changed credential generation, an
+ * explicit admin reset with an actor and a reason, or a free health check that
+ * demonstrates the account is usable again.
+ *
+ * ONE ROW PER PROVIDER, keyed by name rather than appended to, because the
+ * question being asked is "may we call DataForSEO right now" and that has one
+ * current answer. The history of how it got there lives in the collection log
+ * and in `detected_at` / `cleared_at` / `clear_reason`.
+ *
+ * NO SECRET EVER LANDS HERE. `sanitized_message` is provider text with
+ * credentials and URLs stripped by `sanitizeProviderMessage`, and
+ * `credential_generation` is a non-sensitive label (`legacy_trial_2026_08`,
+ * `official_account_2026_08`) that identifies WHICH account without being
+ * derivable back to it. It is an accounting and audit marker and is never used
+ * to authenticate anything.
+ */
+export const siProviderState = sqliteTable("si_provider_state", {
+  /** `dataforseo`. One row per provider. */
+  provider: text("provider").primaryKey(),
+  state: text("state", {
+    enum: [
+      /** Usable, as far as the last observation could tell. */
+      "healthy",
+      /** `40201`. Latched. No retry, no cooldown. */
+      "account_suspended",
+      /** The credential was rejected. Latched. */
+      "auth_failed",
+      /** Reachable and authenticated, but not entitled to an API. */
+      "account_not_enabled",
+    ],
+  }).notNull(),
+  /**
+   * When this state began. Preserved across a `last_checked_at` update so
+   * "suspended since" stays answerable.
+   */
+  detectedAt: text("detected_at").notNull(),
+  lastCheckedAt: text("last_checked_at"),
+  clearedAt: text("cleared_at"),
+  /** Why it was cleared, in this engine's words. Never provider text. */
+  clearReason: text("clear_reason"),
+  /** Opaque actor reference; never an email. */
+  clearedBy: text("cleared_by"),
+  /** What was in flight when it tripped. */
+  endpoint: text("endpoint"),
+  operationType: text("operation_type"),
+  /** The provider's numeric status code, e.g. 40201. */
+  providerStatusCode: integer("provider_status_code"),
+  /** Provider text with credentials and URLs stripped. */
+  sanitizedMessage: text("sanitized_message"),
+  jobId: text("job_id"),
+  operationId: text("operation_id"),
+  /**
+   * Does a human need to do something? True for every latched state, and the
+   * field readiness and the release verifier actually read.
+   */
+  requiresAttention: integer("requires_attention", {
+    mode: "boolean",
+  })
+    .notNull()
+    .default(false),
+  /** Non-sensitive account label. Never a credential or a hash of one. */
+  credentialGeneration: text("credential_generation"),
+  updatedAt: text("updated_at").notNull(),
+});

@@ -1,8 +1,16 @@
-import { envelope, json, num, readJson } from "./http";
+import { badRequest, envelope, isRecord, json, num, readJson } from "./http";
 import * as keywordVolumes from "./keyword-volume-service";
 import * as p2service from "./p2-service";
 import { expireStaleReservations, globalSpend } from "./budget-authority";
-import { holdingReservations } from "./budget-reservations";
+import { holdingReservations, resolveReservation } from "./budget-reservations";
+import { clearProviderState } from "./provider-circuit";
+import { checkProviderHealth } from "./provider-health";
+import {
+  alertDryRun,
+  type AlertFinding,
+  type ChannelState,
+  type LogicalChannel,
+} from "./alert-dry-run";
 import * as p2Store from "./p2-store";
 import { capabilityMatrix, evaluateReleaseGate } from "./rollout-readiness";
 import { dryRunSchedule, proposedPolicy } from "./scheduler-dry-run";
@@ -21,7 +29,7 @@ import type { SiRequestContext } from "./router";
 export async function dispatchKeywordVolume(
   ctx: SiRequestContext,
 ): Promise<Response | null> {
-  const { route, request, config, env, providerStatus } = ctx;
+  const { route, request, url, config, env, providerStatus } = ctx;
   const method = request.method;
 
   // Collect the search volumes the whole of phase 2 weights by. A paid provider
@@ -86,7 +94,7 @@ export async function dispatchKeywordVolume(
       envelope(
         config,
         {
-          reservations,
+          reservations: reservations.map(reservationView),
           holding_micros: reservations.reduce(
             (sum, row) => sum + row.estimatedMaxCostMicros,
             0,
@@ -101,6 +109,95 @@ export async function dispatchKeywordVolume(
         },
         { providerStatus },
       ),
+    );
+  }
+
+  // SETTLE ONE RESERVATION AGAINST EVIDENCE. The only transition out of
+  // `reconciliation_pending`, and the only hard, never-waivable release
+  // blocker. `resolveReservation` has existed since migration 0050 with exactly
+  // the right contract — integer micro-USD, non-empty evidence, non-empty actor,
+  // typed refusals, its own columns — and nothing could reach it, which made a
+  // blocker that could only be cleared by a human unclearable by anyone.
+  //
+  // A stated ZERO is accepted, because "the provider never billed this" is a
+  // real finding. It still needs evidence: proved and deduced are different
+  // things, and this endpoint only takes the first.
+  {
+    const match = /^budget\/reservations\/([A-Za-z0-9_-]{1,64})\/resolve$/.exec(
+      route,
+    );
+    if (match?.[1] && method === "POST") {
+      const body = await readJson(request);
+      const result = await resolveReservation({
+        reservationId: match[1],
+        // Deliberately NOT coerced. A float, a numeric string or a null is a
+        // caller who does not have an exact figure, and the refusal is the
+        // correct answer to that.
+        verifiedCostMicros:
+          typeof body.exact_cost_micros === "number"
+            ? body.exact_cost_micros
+            : Number.NaN,
+        evidence: typeof body.evidence === "string" ? body.evidence : "",
+        actor: typeof body.actor === "string" ? body.actor : "",
+      });
+      return json(
+        envelope(config, result, { providerStatus }),
+        result.resolved ? 200 : 422,
+      );
+    }
+  }
+
+  // IS THE PROVIDER ACCOUNT USABLE — asked for nothing.
+  //
+  // Two DataForSEO endpoints the provider documents as non-billable: the
+  // appendix user-data read and the AI Optimization model catalogue. Verifying
+  // a credential with a paid call is how a check turns into a charge, so this
+  // route cannot make one: nothing here reserves capacity and nothing reaches a
+  // billable endpoint.
+  if (route === "provider/health" && method === "GET") {
+    const health = await checkProviderHealth(config, {
+      credentialPresent: providerStatus !== "not_configured",
+      checkAi: url.searchParams.get("ai") !== "false",
+    });
+    return json(envelope(config, health, { providerStatus }));
+  }
+
+  // THE ONLY EXIT FROM A LATCHED BREAKER, and it is never automatic. A `40201`
+  // means the account is suspended; no cooldown, no scheduler and no successful
+  // call elsewhere may lift it. Someone has to say who they are and why.
+  if (route === "provider/reset" && method === "POST") {
+    const body = await readJson(request);
+    const result = await clearProviderState({
+      actor: typeof body.actor === "string" ? body.actor : "",
+      reason: typeof body.reason === "string" ? body.reason : "",
+      credentialGeneration:
+        config.SEARCH_INTELLIGENCE_PROVIDER_ACCOUNT_GENERATION,
+    });
+    return json(
+      envelope(config, result, { providerStatus }),
+      result.cleared ? 200 : 422,
+    );
+  }
+
+  // WHERE WOULD THIS GO, AND WHY IS NOTHING BEING SENT?
+  //
+  // Routing is the one thing that cannot be verified by switching alerts on —
+  // finding out where an impersonation warning lands by delivering it is not a
+  // test. So the decision is exposed without the delivery. No network call is
+  // made from this path, and a test asserts it.
+  if (route === "alerts/dry-run" && method === "POST") {
+    const body = await readJson(request);
+    const finding = parseFinding(body);
+    if (!finding) {
+      return badRequest(
+        "INVALID_FINDING",
+        "a finding needs a known kind, a title and a risk of low|medium|high",
+      );
+    }
+    return json(
+      envelope(config, alertDryRun(config, finding, channelStatesFrom(body)), {
+        providerStatus,
+      }),
     );
   }
 
@@ -196,4 +293,151 @@ export async function dispatchKeywordVolume(
   }
 
   return null;
+}
+
+/**
+ * What a reservation looks like from outside.
+ *
+ * The reservation rows carry everything needed to audit a charge, and some of
+ * it is not a status surface's business. Ids are abbreviated because a reader
+ * needs to TELL TWO ROWS APART and correlate them with an invoice, not to
+ * reconstruct them; the full id is what the resolve endpoint takes, and whoever
+ * is settling one already has it from the ledger.
+ *
+ * Never present, at any verbosity: an Authorization header, a credential, a
+ * provider password, a full request payload or a full receipt.
+ */
+function abbreviate(value: string | null): string | null {
+  if (!value) return null;
+  return value.length <= 12 ? value : `${value.slice(0, 8)}…${value.slice(-4)}`;
+}
+
+function reservationView(
+  row: Awaited<ReturnType<typeof holdingReservations>>[number],
+) {
+  return {
+    reservation_id: abbreviate(row.id),
+    job_id: abbreviate(row.jobId),
+    operation_id: row.operationId,
+    collector: row.collector,
+    endpoint: row.operationType,
+    // The keyword or domain the operation ran against.
+    subject: row.subject,
+    subject_scope: row.subjectScope,
+    created_at: row.createdAt,
+    estimated_max_cost_micros: row.estimatedMaxCostMicros,
+    // What the PROVIDER reported, which for a pending row is nothing at all.
+    // Null here is the entire reason the row is stuck, so it is reported as
+    // null rather than smoothed to a zero.
+    actual_cost_micros: row.actualCostMicros ?? null,
+    status: row.status,
+    cost_status: row.costStatus,
+    evidence_required: true,
+  };
+}
+
+/**
+ * Channel states are supplied by the caller — the engine owns no webhooks.
+ *
+ * Narrowed with declared predicates rather than assertions: everything here
+ * arrives from a request body, and an assertion would be this router promising
+ * a shape a stranger sent it.
+ */
+const CHANNEL_STATES: readonly ChannelState[] = [
+  "configured",
+  "webhook_invalid_configuration",
+  "webhook_not_configured",
+  "unknown",
+];
+
+const CHANNELS: readonly LogicalChannel[] = [
+  "intel",
+  "brand_protection",
+  "security",
+];
+
+function asChannelState(value: unknown): ChannelState | null {
+  return CHANNEL_STATES.find((state) => state === value) ?? null;
+}
+
+function channelStatesFrom(
+  body: Record<string, unknown>,
+): Partial<Record<LogicalChannel, ChannelState>> {
+  const raw = body.channel_states;
+  if (!isRecord(raw)) return {};
+  const out: Partial<Record<LogicalChannel, ChannelState>> = {};
+  for (const channel of CHANNELS) {
+    const state = asChannelState(raw[channel]);
+    if (state) out[channel] = state;
+  }
+  return out;
+}
+
+/**
+ * Parse a finding, refusing anything outside the vocabulary.
+ *
+ * A dry run whose input is whatever the caller sent would answer questions
+ * about findings that cannot exist, and its answers would be quoted. Unknown
+ * kinds and risks are rejected rather than defaulted — defaulting a risk to
+ * `low` would make an unroutable finding look deliberately unimportant.
+ */
+const FINDING_KINDS: readonly AlertFinding["kind"][] = [
+  "ranking_change",
+  "competitor_move",
+  "backlink_change",
+  "campaign",
+  "reputation",
+  "suspicious_domain",
+  "impersonation",
+  "brand_confusion",
+];
+
+type SignalFamily = AlertFinding["signalFamilies"][number];
+
+const SIGNAL_FAMILIES: readonly SignalFamily[] = [
+  "ranking",
+  "backlink",
+  "content",
+  "domain_registration",
+  "certificate",
+  "traffic",
+  "reputation",
+];
+
+function asFindingKind(value: unknown): AlertFinding["kind"] | null {
+  return FINDING_KINDS.find((kind) => kind === value) ?? null;
+}
+
+function asSignalFamily(value: unknown): SignalFamily | null {
+  return SIGNAL_FAMILIES.find((family) => family === value) ?? null;
+}
+
+function parseFinding(body: Record<string, unknown>): AlertFinding | null {
+  const kind = asFindingKind(body.kind);
+  const risk = body.risk;
+  const title = body.title;
+  if (
+    !kind ||
+    typeof title !== "string" ||
+    title.trim() === "" ||
+    (risk !== "low" && risk !== "medium" && risk !== "high")
+  ) {
+    return null;
+  }
+  const rawFamilies = Array.isArray(body.signal_families)
+    ? body.signal_families
+    : [];
+  const signalFamilies: SignalFamily[] = [];
+  for (const entry of rawFamilies) {
+    const family = asSignalFamily(entry);
+    if (family) signalFamilies.push(family);
+  }
+  return {
+    kind,
+    title,
+    summary: typeof body.summary === "string" ? body.summary : "",
+    risk,
+    signalFamilies,
+    subject: typeof body.subject === "string" ? body.subject : null,
+  };
 }

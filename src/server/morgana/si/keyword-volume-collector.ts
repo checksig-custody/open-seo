@@ -6,6 +6,7 @@ import {
   type CollectionAccounting,
 } from "./collection-accounting";
 import { classifyProviderError, type TypedFailure } from "./rank-errors";
+import { observeProviderError } from "./provider-circuit";
 
 /**
  * Morgana Search Intelligence — the live search-volume collector.
@@ -222,6 +223,10 @@ export async function collectKeywordVolumes(input: {
       ],
       { metered: true, paidSubmission: true },
     );
+    await observeProviderError(error, {
+      endpoint: KEYWORD_OVERVIEW_ENDPOINT,
+      operationType: "keyword_overview",
+    });
     return {
       status: "failed",
       failure: classifyProviderError(error, KEYWORD_OVERVIEW_ENDPOINT),

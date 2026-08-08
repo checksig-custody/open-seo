@@ -7,6 +7,7 @@ import {
 } from "./collection-accounting";
 import { classifyBacklinkError, type TypedFailure } from "./backlink-errors";
 import { normalizeBacklinkDomain } from "./backlink-normalize";
+import { observeProviderError } from "./provider-circuit";
 
 /**
  * Morgana Search Intelligence — the live backlink collector.
@@ -440,6 +441,10 @@ export async function collectLiveBacklinks(input: {
     calls.push({
       endpointPath: endpoint,
       cost: { micros: null, status: "not_reported" },
+    });
+    await observeProviderError(error, {
+      endpoint,
+      operationType: "backlinks",
     });
     return {
       status: "failed",

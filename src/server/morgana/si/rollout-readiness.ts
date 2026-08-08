@@ -82,6 +82,21 @@ export interface ReadinessFacts {
   reconciliationPending: number;
   unexpectedSpendDetected: boolean;
   webhooksInvalid: string[];
+  /**
+   * Did anything actually LOOK at the webhook configuration?
+   *
+   * False from the engine, which holds no webhooks: they live in Morgana. An
+   * empty `webhooksInvalid` therefore means "not checked here", not "all fine",
+   * and the gate below is careful to say which.
+   */
+  webhooksEvaluated: boolean;
+  /** The latched provider-account state, or null when never observed. */
+  providerCircuitState:
+    | "healthy"
+    | "account_suspended"
+    | "auth_failed"
+    | "account_not_enabled"
+    | null;
 }
 
 const BLOCKER = {
@@ -102,8 +117,16 @@ const BLOCKER = {
   costUnknown: "provider_cost_unknown",
   entitlement: "provider_entitlement_unverified",
   webhooks: "webhooks_invalid",
+  /** Nobody looked. Not the same as "nothing is wrong". */
+  webhooksUnevaluated: "webhooks_not_evaluated",
   reconcile: "reconciliation_pending",
   unexpected: "unexpected_spend_detected",
+  /**
+   * The provider has said something about the account itself. Never waivable:
+   * a suspended account cannot serve any capability, so no business decision
+   * can make the subsystem releasable while it holds.
+   */
+  providerAccount: "provider_account_blocked",
 } as const;
 
 /**
@@ -400,6 +423,31 @@ export function evaluateReleaseGate(
       capability: "alerting",
       blocker: BLOCKER.webhooks,
       waived: waivedCapabilities.has("webhooks_invalid"),
+    });
+  } else if (!facts.webhooksEvaluated) {
+    // NOT SILENCE. The engine holds no webhooks and cannot classify them, and
+    // an unexamined channel must never read as a healthy one — that is the same
+    // mistake as reporting implementation as verification. The composite gate
+    // in Morgana's release verifier can see the real classification and is the
+    // authority; this row exists so an engine-only reader knows it is looking
+    // at a partial answer.
+    blockers.push({
+      capability: "alerting",
+      blocker: BLOCKER.webhooksUnevaluated,
+      waived: waivedCapabilities.has("webhooks_invalid"),
+    });
+  }
+
+  // A provider-account verdict outranks every capability row: none of them can
+  // be served while it holds, and it is deliberately outside the waivable set.
+  if (
+    facts.providerCircuitState !== null &&
+    facts.providerCircuitState !== "healthy"
+  ) {
+    blockers.push({
+      capability: "provider_account",
+      blocker: BLOCKER.providerAccount,
+      waived: false,
     });
   }
 

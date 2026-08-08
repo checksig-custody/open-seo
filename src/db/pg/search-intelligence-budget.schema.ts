@@ -1,4 +1,5 @@
 import {
+  boolean,
   index,
   integer,
   pgTable,
@@ -60,3 +61,23 @@ export const siBudgetReservations = pgTable(
     ),
   ],
 );
+
+/** Postgres mirror of the latched provider state (see the D1 schema). */
+export const siProviderState = pgTable("si_provider_state", {
+  provider: text("provider").primaryKey(),
+  state: text("state").notNull(),
+  detectedAt: text("detected_at").notNull(),
+  lastCheckedAt: text("last_checked_at"),
+  clearedAt: text("cleared_at"),
+  clearReason: text("clear_reason"),
+  clearedBy: text("cleared_by"),
+  endpoint: text("endpoint"),
+  operationType: text("operation_type"),
+  providerStatusCode: integer("provider_status_code"),
+  sanitizedMessage: text("sanitized_message"),
+  jobId: text("job_id"),
+  operationId: text("operation_id"),
+  requiresAttention: boolean("requires_attention").notNull().default(false),
+  credentialGeneration: text("credential_generation"),
+  updatedAt: text("updated_at").notNull(),
+});

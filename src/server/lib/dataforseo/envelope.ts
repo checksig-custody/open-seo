@@ -155,7 +155,14 @@ export function assertOk<T extends DataforseoTaskLike>(
     const message = response.status_message || "DataForSEO request failed";
     throw (
       classify?.(response.status_code, message, classifyPath ?? "") ??
-      new AppError("INTERNAL_ERROR", message)
+      new AppError("INTERNAL_ERROR", message, {
+        // MORGANA LOCAL PATCH (UPSTREAM.md, patch P20). The numeric code is the
+        // only thing that distinguishes an account SUSPENSION (40201) from a
+        // rate limit (40202), and collapsing both into `INTERNAL_ERROR` made
+        // that distinction unrecoverable downstream. Carrying it in `details`
+        // adds no new failure mode: it is a number the provider already sent.
+        dataforseoStatusCode: String(response.status_code),
+      })
     );
   }
 
@@ -181,7 +188,10 @@ export function assertOk<T extends DataforseoTaskLike>(
         INVALID_FIELD_MESSAGE_RE.test(message),
       );
 
-    throw new AppError("INTERNAL_ERROR", detailedMessage);
+    throw new AppError("INTERNAL_ERROR", detailedMessage, {
+      // Same patch, task level. See the response-level throw above.
+      dataforseoStatusCode: String(task.status_code),
+    });
   }
 
   return task;

@@ -27,6 +27,17 @@ vi.mock("@/server/lib/dataforseo/client", () => ({
       fetchReferringDomains,
     }),
 }));
+// See the note in `si-rank-lifecycle.test.ts`: the circuit breaker reaches D1
+// and these suites keep the collector graph free of it. An unobserved provider
+// does not block, which is the production default before the first call.
+vi.mock("./provider-circuit", () => ({
+  observeProviderError: vi.fn(async () => ({
+    kind: "none",
+    statusCode: null,
+    sanitizedMessage: null,
+  })),
+  providerBlock: vi.fn(async () => ({ blocked: false })),
+}));
 
 const { collectLiveBacklinks, DEFAULT_SAMPLE_LIMIT } =
   await import("./backlink-live-collector");

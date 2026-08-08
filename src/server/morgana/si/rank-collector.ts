@@ -14,6 +14,7 @@ import {
   type NormalizedRank,
   type SerpItem,
 } from "./rank-normalize";
+import { observeProviderError } from "./provider-circuit";
 
 /**
  * Morgana Search Intelligence — the phase 2 live SERP collector.
@@ -221,6 +222,13 @@ export async function collectRankTask(input: {
     // not parse — none of which is a statement about the task. Classifying this
     // as a task failure is what stranded three paid SERPs.
     const failure = classifyProviderError(error, TASK_GET_ENDPOINT);
+    // An account-level verdict is not about this task at all. Latching it
+    // here stops every other collector too, which is the point: 40201 is a
+    // statement about the credential they all share.
+    await observeProviderError(error, {
+      endpoint: TASK_GET_ENDPOINT,
+      operationType: "serp_task_get",
+    });
     return {
       status: isTransportFailure(failure) ? "unavailable" : "failed",
       failure,

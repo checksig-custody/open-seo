@@ -24,8 +24,12 @@ const makeDb = () => ({
   // `select()` with no projection is a select-all: that is how a reservation
   // is read back before it is committed.
   select: (projection: Record<string, unknown> = {}) => ({
-    from: () => {
-      const result = currentRows(projection);
+    // `readProviderState` is a select-all too, so the table has to be
+    // discriminated: answering it with a reservation row would be a fake db
+    // lying about which table it read. The breaker's own scenarios live in
+    // `si-release-gate.test.ts`; here it is always "never observed".
+    from: (table?: Record<string, unknown>) => {
+      const result = table && "state" in table ? [] : currentRows(projection);
       // `.where(...)` is sometimes awaited directly and sometimes followed by
       // `.limit(1)` or `.groupBy(...)`, so what it returns has to be both a
       // promise and a builder. Built ON a promise rather than as an object with
@@ -133,6 +137,11 @@ vi.mock("@/db/search-intelligence-budget.schema", () => ({
     id: {},
     expiresAt: {},
   },
+  // The authority consults the provider-account circuit breaker before it
+  // reserves anything, so the table it reads has to exist here too — and the
+  // fake db discriminates on these two keys, because a select-all against the
+  // wrong table would have answered with a reservation row.
+  siProviderState: { provider: {}, state: {} },
 }));
 
 const {
