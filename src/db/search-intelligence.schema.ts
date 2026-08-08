@@ -302,7 +302,7 @@ export const searchUsageLedger = sqliteTable(
      * correlation those rows carry.
      */
     costCentre: text("cost_centre", {
-      enum: ["domain_overview", "ranking", "keyword_volume"],
+      enum: ["domain_overview", "ranking", "keyword_volume", "ai_visibility"],
     }),
     /** DataForSEO path, joined with '/'. */
     endpointPath: text("endpoint_path").notNull(),

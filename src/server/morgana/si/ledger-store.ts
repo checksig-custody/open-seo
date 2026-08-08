@@ -34,7 +34,11 @@ type CostStatus = "reported" | "zero" | "not_reported";
  * collector's money to whichever centre happened to be written first, which is
  * exactly how ranking spend spent a week reported as Domain Overview.
  */
-type LedgerCostCentre = "domain_overview" | "ranking" | "keyword_volume";
+type LedgerCostCentre =
+  | "domain_overview"
+  | "ranking"
+  | "keyword_volume"
+  | "ai_visibility";
 
 interface RecordUsageInput {
   day: string;

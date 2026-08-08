@@ -87,6 +87,10 @@ const SHARED_LEDGER_CENTRES = [
   "domain_overview",
   "ranking",
   "keyword_volume",
+  // Phase 5. Reported from the day the collector existed rather than from the
+  // day it first spends: a centre that appears only once money has moved is a
+  // centre nobody was watching beforehand.
+  "ai_visibility",
   "unattributed",
 ] as const;
 
