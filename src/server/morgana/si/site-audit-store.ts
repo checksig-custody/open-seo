@@ -52,6 +52,13 @@ export async function createRun(input: {
       id,
       entityId: input.entityId,
       status: "queued",
+      // Stated, not inferred. Every other capability asserts where its data
+      // came from and readiness filters on it; Site Audit had nothing to filter
+      // on, so it inferred "real" from the absence of a fixture writer — true
+      // today, and not checkable. This is a first-party crawl of the entity's
+      // own pages, which is also why it buys nothing and why the budget
+      // authority excludes its ledger.
+      source: "first_party_crawl",
       trigger: input.trigger,
       requestedBy: input.requestedBy ?? null,
       pageLimit: input.pageLimit,

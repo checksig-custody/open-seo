@@ -156,6 +156,7 @@ async function dispatchReads(ctx: SiRequestContext): Promise<Response | null> {
     const priority = str(body.priority);
     const updated = await store.updateEntity(entityMatch[1], {
       displayName: str(body.display_name),
+      domain: str(body.domain),
       priority:
         priority === "high" || priority === "low" || priority === "normal"
           ? priority

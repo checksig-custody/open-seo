@@ -67,7 +67,10 @@ const REQUIRED_NAME_FRAGMENT = "search-intelligence";
  * than discovered on an invoice. Raising it is a product decision, not a
  * deployment one.
  */
-const GLOBAL_MONTHLY_BUDGET_USD = 10;
+// Budget V2: $10 is a soft operating envelope; $20 is the absolute Worker
+// ceiling enforced here before a deployment can make paid calls possible.
+const GLOBAL_MONTHLY_HARD_CAP_USD = 20;
+const GLOBAL_DAILY_HARD_CAP_USD = 1;
 const STAGING_FRAGMENT = "staging";
 
 /**
@@ -247,8 +250,8 @@ function main() {
    * blocking. Production may spend, but only within a bounded and coherent
    * pair: both caps above zero, and the month able to fund the day.
    *
-   * The global product budget is 10 USD/month. A production config asking for
-   * more than that is refused here rather than discovered on an invoice.
+   * Budget V2 has a $10 soft envelope and a $20 emergency ceiling. The hard
+   * ceiling is enforced here; policy/forecast keeps normal operation below it.
    */
   const vars = config.vars ?? {};
   const stage = stageOf(config);
@@ -283,9 +286,14 @@ function main() {
         `monthly cap ${String(monthlyCap)} is below the daily cap ${String(dailyCap)} — incoherent budget, refusing`,
       );
     }
-    if (monthlyCap > GLOBAL_MONTHLY_BUDGET_USD) {
+    if (dailyCap > GLOBAL_DAILY_HARD_CAP_USD) {
       violations.push(
-        `monthly cap ${String(monthlyCap)} exceeds the ${String(GLOBAL_MONTHLY_BUDGET_USD)} USD Search Intelligence budget — refusing`,
+        `daily cap ${String(dailyCap)} exceeds the ${String(GLOBAL_DAILY_HARD_CAP_USD)} USD Search Intelligence hard cap — refusing`,
+      );
+    }
+    if (monthlyCap > GLOBAL_MONTHLY_HARD_CAP_USD) {
+      violations.push(
+        `monthly cap ${String(monthlyCap)} exceeds the ${String(GLOBAL_MONTHLY_HARD_CAP_USD)} USD Search Intelligence hard cap — refusing`,
       );
     }
   }
@@ -300,7 +308,6 @@ function main() {
     "SEARCH_INTELLIGENCE_MCP_ENABLED",
     "SEARCH_INTELLIGENCE_AI_ENABLED",
     "SEARCH_INTELLIGENCE_UI_ENABLED",
-    "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED",
     "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED",
     "SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED",
     "SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED",
@@ -309,6 +316,9 @@ function main() {
     if (vars[key] !== undefined && vars[key] !== "false") {
       violations.push(`${key} must be "false" — it is not a surface flag`);
     }
+  }
+  if (stage === "staging" && vars.SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED !== "false") {
+    violations.push('SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED must be "false" in staging');
   }
   // Upstream self-host telemetry is ON by default and posts to a hardcoded
   // PostHog project. Phase 0 must not emit it.

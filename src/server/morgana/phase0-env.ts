@@ -53,6 +53,30 @@ export const phase0EnvSchema = z
       .enum(["staging", "production"])
       .default("staging"),
     SEARCH_INTELLIGENCE_API_VERSION: z.string().min(1).default("2026-08-05"),
+    /**
+     * WHICH DataForSEO account this deploy is talking to — a label, never a
+     * credential.
+     *
+     * Search Intelligence ran on a second DataForSEO trial until the provider
+     * suspended it with `40201`; it now shares the first, official, paid account
+     * with Brand Monitoring. Both eras have spend in the same ledger, and
+     * without a marker there is no way to tell "this trial cost 335 472 µUSD"
+     * from "this account has cost us nothing yet" — which is precisely the
+     * question the historical reconciliation turns on.
+     *
+     * NOT DERIVED FROM THE SECRET, and not reversible to it. It authenticates
+     * nothing, gates nothing and is safe to print. It is an accounting and audit
+     * marker, and the credential paths stay entirely separate from it:
+     * `DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY` here, `DATAFORSEO_LOGIN` /
+     * `DATAFORSEO_PASSWORD` in Morgana, with no fallback in either direction.
+     */
+    SEARCH_INTELLIGENCE_PROVIDER_ACCOUNT_GENERATION: z
+      .string()
+      .regex(
+        /^[a-z0-9_]{1,64}$/,
+        "account generation must be a short lowercase label",
+      )
+      .default("unknown"),
     ENGINE_UPSTREAM_REPOSITORY: z
       .string()
       .default("https://github.com/every-app/open-seo"),
@@ -168,6 +192,7 @@ const PHASE0_ENV_KEYS = [
   "SEO_DATAFORSEO_MONTHLY_COST_CAP_USD",
   "SEARCH_INTELLIGENCE_ENVIRONMENT",
   "SEARCH_INTELLIGENCE_API_VERSION",
+  "SEARCH_INTELLIGENCE_PROVIDER_ACCOUNT_GENERATION",
   "ENGINE_UPSTREAM_REPOSITORY",
   "ENGINE_UPSTREAM_RELEASE",
   "ENGINE_UPSTREAM_COMMIT",

@@ -104,6 +104,7 @@ export async function createEntity(
 
 interface UpdateEntityInput {
   displayName?: string;
+  domain?: string;
   priority?: Priority;
   includeSubdomains?: boolean;
   locationCode?: number;
@@ -123,6 +124,13 @@ export async function updateEntity(
   const patch: Record<string, unknown> = { updatedAt: timestamp };
   if (input.displayName !== undefined)
     patch.displayName = input.displayName.trim().slice(0, 200);
+  if (input.domain !== undefined) {
+    const domain = normalizeEntityDomain(input.domain, {
+      includeSubdomains: input.includeSubdomains ?? existing.includeSubdomains,
+    });
+    patch.canonicalDomain = domain.display;
+    patch.normalizedDomain = domain.normalized;
+  }
   if (input.priority !== undefined) patch.priority = input.priority;
   if (input.includeSubdomains !== undefined)
     patch.includeSubdomains = input.includeSubdomains;
@@ -140,6 +148,26 @@ export async function updateEntity(
   }
   await db.update(searchEntities).set(patch).where(eq(searchEntities.id, id));
   return getEntity(id);
+}
+
+/**
+ * Scheduling state is advanced only after a successful stored result. This is
+ * what collapses missed intervals into one fresh collection instead of trying
+ * to replay every interval after a scheduler outage.
+ */
+export async function markEntityRefreshed(
+  id: string,
+  kind: "domain_overview" | "backlinks",
+  at: string = nowIso(),
+): Promise<void> {
+  await db
+    .update(searchEntities)
+    .set(
+      kind === "backlinks"
+        ? { lastBacklinkRefreshedAt: at, updatedAt: at }
+        : { lastRefreshedAt: at, updatedAt: at },
+    )
+    .where(eq(searchEntities.id, id));
 }
 
 // --- snapshots --------------------------------------------------------------

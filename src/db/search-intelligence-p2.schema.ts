@@ -78,6 +78,12 @@ export const trackedKeywords = sqliteTable(
       .default(true),
     /** Provider search volume, refreshed opportunistically. Null until known. */
     searchVolume: integer("search_volume"),
+    /**
+     * Where this keyword came from: `bootstrap` for the seeded watchlist,
+     * `manual` for one a human added. Kept so a re-runnable bootstrap can tell
+     * its own rows apart from an operator's edits and never overwrite them.
+     */
+    createdSource: text("created_source").notNull().default("manual"),
     lastCheckedAt: text("last_checked_at"),
     nextCheckAt: text("next_check_at"),
     createdAt: text("created_at")
@@ -135,6 +141,26 @@ export const siRankSnapshots = sqliteTable(
     rankingUrl: text("ranking_url"),
     normalizedRankingUrl: text("normalized_ranking_url"),
     isFound: integer("is_found", { mode: "boolean" }).notNull(),
+    /** The host the ranking URL actually resolved to, after normalization. */
+    rankingDomain: text("ranking_domain"),
+    /**
+     * The SERP element the position was read from — `organic` for the product's
+     * ranking number. Stored so a rank can never later be confused with a
+     * featured snippet or a local pack, which is a different claim entirely.
+     */
+    resultType: text("result_type"),
+    /**
+     * `complete` or `partial`. A partial observation is one the provider could
+     * not fully answer, and it must never be read as a measurement: in
+     * particular it can never confirm a lost ranking.
+     */
+    snapshotStatus: text("snapshot_status", { enum: ["complete", "partial"] })
+      .notNull()
+      .default("complete"),
+    /** Why it is partial, when it is. Sanitised; never provider text. */
+    snapshotStatusReason: text("snapshot_status_reason"),
+    /** The queued task this observation came from — accounting correlation. */
+    providerTaskId: text("provider_task_id"),
     provider: text("provider", { enum: ["dataforseo", "fixture"] }).notNull(),
     estimatedCostMicros: integer("estimated_cost_micros").notNull().default(0),
     actualCostMicros: integer("actual_cost_micros").notNull().default(0),
@@ -185,6 +211,8 @@ export const keywordGapSnapshots = sqliteTable(
     bestCompetitorEntityId: text("best_competitor_entity_id"),
     /** Simple, explainable: volume × gap size. Never an opaque composite. */
     opportunityScore: real("opportunity_score"),
+    /** Why a score is absent, not merely that it is. */
+    opportunityScoreReason: text("opportunity_score_reason"),
     createdAt: text("created_at")
       .notNull()
       .default(sql`(current_timestamp)`),
@@ -218,6 +246,15 @@ export const shareOfSearchSnapshots = sqliteTable(
     reason: text("reason"),
     keywordsConsidered: integer("keywords_considered").notNull().default(0),
     keywordsCovered: integer("keywords_covered").notNull().default(0),
+    /** Volume known and above zero: the keywords that could carry weight. */
+    eligibleKeywords: integer("eligible_keywords").notNull().default(0),
+    /** Dropped before weighting, for the reasons in `exclusionReasons`. */
+    excludedKeywords: integer("excluded_keywords").notNull().default(0),
+    /** JSON: `{ volume_unknown: n, volume_zero: n, no_position: n }`. */
+    exclusionReasons: text("exclusion_reasons"),
+    /** Covered / eligible. Null when nothing was eligible to cover. */
+    coverage: real("coverage"),
+    calculatedAt: text("calculated_at"),
     /** Which CTR curve produced this number. Changing the curve changes history. */
     ctrModelVersion: text("ctr_model_version").notNull(),
     createdAt: text("created_at")
@@ -345,5 +382,104 @@ export const phase2UsageLedger = sqliteTable(
   },
   (table) => [
     uniqueIndex("phase2_usage_ledger_day_job_idx").on(table.day, table.jobType),
+  ],
+);
+
+/**
+ * The lifecycle of one DataForSEO SERP task, persisted.
+ *
+ * MORGANA LOCAL PATCH (see UPSTREAM.md, patch P12).
+ *
+ * WHY A TABLE AND NOT A PROMISE. A queued SERP is charged when it is POSTED and
+ * answered some seconds to minutes later, by a second, free call. Waiting for
+ * it inside the request that submitted it would hold a Worker invocation open
+ * across a provider queue, and losing that invocation — a deploy, a timeout, a
+ * subrequest ceiling — would lose the only record that money had been spent.
+ *
+ * So the submission and the collection are separate operations joined by a row.
+ * `provider_task_id` is what makes the paid work recoverable: as long as it is
+ * stored, the result can be fetched by any later invocation, and no retry can
+ * turn into a second paid submission.
+ *
+ * `next_check_at` is the backoff, held here rather than in a scheduler's head,
+ * so a restart does not stampede every pending task at once.
+ */
+export const siRankTasks = sqliteTable(
+  "si_rank_tasks",
+  {
+    id: text("id").primaryKey(),
+    /** The rank-check job this task belongs to; the accounting correlation id. */
+    jobId: text("job_id"),
+    trackedKeywordId: text("tracked_keyword_id")
+      .notNull()
+      .references(() => trackedKeywords.id, { onDelete: "cascade" }),
+    entityId: text("entity_id")
+      .notNull()
+      .references(() => searchEntities.id, { onDelete: "cascade" }),
+    /**
+     * DataForSEO's own id for the queued task. Null only between deciding to
+     * submit and the provider answering; once set it is never overwritten,
+     * because it is the receipt for a call that has already been billed.
+     */
+    providerTaskId: text("provider_task_id"),
+    keyword: text("keyword").notNull(),
+    targetDomain: text("target_domain").notNull(),
+    locationCode: integer("location_code").notNull(),
+    languageCode: text("language_code").notNull(),
+    device: text("device", { enum: ["desktop", "mobile"] }).notNull(),
+    searchEngine: text("search_engine").notNull().default("google"),
+    /**
+     * The collection window this task belongs to (a UTC day). Part of the
+     * dedupe key: "already asked today" is the question that decides whether a
+     * second paid submission is allowed.
+     */
+    collectionWindow: text("collection_window").notNull(),
+    status: text("status", {
+      enum: [
+        "queued",
+        "submitting",
+        "submitted",
+        "waiting",
+        "ready",
+        "fetching",
+        "normalizing",
+        "succeeded",
+        "skipped",
+        // Local polling gave up; the provider task may still be alive and the
+        // receipt is still valid. Recoverable by explicit request only.
+        "recovery_pending",
+        "failed",
+      ],
+    }).notNull(),
+    /** `keyword|entity|window|location|language|device|engine`. */
+    dedupeKey: text("dedupe_key").notNull(),
+    submittedAt: text("submitted_at"),
+    /** When a fetch may next be attempted — the persisted backoff. */
+    nextCheckAt: text("next_check_at"),
+    lastCheckedAt: text("last_checked_at"),
+    completedAt: text("completed_at"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    /** Where a failure came from, using the phase 1 taxonomy. */
+    errorOrigin: text("error_origin"),
+    errorClass: text("error_class"),
+    errorCode: text("error_code"),
+    /** The endpoint actually in flight when it failed. */
+    endpoint: text("endpoint"),
+    snapshotId: text("snapshot_id"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(current_timestamp)`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(current_timestamp)`),
+  },
+  (table) => [
+    uniqueIndex("si_rank_tasks_dedupe_idx").on(table.dedupeKey),
+    index("si_rank_tasks_status_idx").on(table.status, table.nextCheckAt),
+    index("si_rank_tasks_provider_idx").on(table.providerTaskId),
+    index("si_rank_tasks_keyword_idx").on(
+      table.trackedKeywordId,
+      table.collectionWindow,
+    ),
   ],
 );

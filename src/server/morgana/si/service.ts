@@ -1,5 +1,6 @@
 import { isEnabled, type Phase0Config } from "../phase0-env";
 import { checkBudget } from "./budget";
+import { globalSpend } from "./budget-authority";
 import { fixtureKeywords, fixtureOverview, fixturePages } from "./fixtures";
 import { runLiveDomainRefresh } from "./refresh-live";
 import {
@@ -203,6 +204,7 @@ export async function refreshEntity(
     });
     await ledger.recordUsage({
       day: snapshotDate,
+      costCentre: "domain_overview",
       entityId: entity.id,
       jobId: job.id,
       endpointPath: "fixture/domain_overview",
@@ -212,6 +214,7 @@ export async function refreshEntity(
       status: "succeeded",
       snapshotId: result.snapshotId,
     });
+    await store.markEntityRefreshed(entity.id, "domain_overview", now.toISOString());
     return {
       entityId: entity.id,
       jobId: job.id,
@@ -250,15 +253,16 @@ export async function refreshEntity(
   // circuit breaker, which is genuinely its own state and not derivable from
   // usage.
   const budgetState = await ledger.readBudgetState(month);
-  const [monthTotals, dayTotals] = await Promise.all([
-    ledger.ledgerTotals(month),
-    ledger.ledgerTotals(snapshotDate),
-  ]);
+  // GLOBAL spend, not phase 1's own. Every collector weighing only its own
+  // ledger against a shared cap is what let the day reach 0.21400 USD against
+  // 0.20 — four correct local answers adding up to a wrong global one.
+  const global = await globalSpend(config, { now });
   const decision = checkBudget(
     limitsFrom(config),
     {
-      dailyCostMicros: dayTotals.actualCostMicros,
-      monthlyCostMicros: monthTotals.actualCostMicros,
+      dailyCostMicros: global.dailyActualMicros + global.openReservationsMicros,
+      monthlyCostMicros:
+        global.monthlyActualMicros + global.openReservationsMicros,
       consecutiveFailures: budgetState.consecutiveFailures,
       circuitOpenedAt: budgetState.circuitOpenedAt,
     },
@@ -267,6 +271,7 @@ export async function refreshEntity(
   if (!decision.allowed) {
     await ledger.recordUsage({
       day: snapshotDate,
+      costCentre: "domain_overview",
       entityId: entity.id,
       jobId: job.id,
       endpointPath: "dataforseo_labs/google/domain_rank_overview/live",
@@ -295,6 +300,7 @@ export async function refreshEntity(
     pageLimit: TOP_PAGE_LIMIT,
     force: input.force ?? false,
   });
+  await store.markEntityRefreshed(entity.id, "domain_overview", now.toISOString());
   return {
     entityId: entity.id,
     jobId: job.id,

@@ -10,7 +10,11 @@ import {
 import * as p2 from "./p2-store";
 import * as p2an from "./p2-analytics-store";
 import * as p2jobs from "./p2-jobs-store";
+import * as rankTasks from "./rank-task-store";
+import { bootstrapTrackedKeywords } from "./rank-bootstrap";
 import * as p2service from "./p2-service";
+import * as rankRecovery from "./rank-recovery-service";
+import { dispatchKeywordVolume } from "./p2-volume-router";
 import type { SiRequestContext } from "./router";
 import { DEFAULT_CLUSTERS, type Priority } from "./keywords";
 
@@ -327,10 +331,82 @@ async function dispatchP2Operations(
 
   if (route === "rank-tick" && method === "POST") {
     const body = await readJson(request);
+    // Optional, and narrowing only: name the keywords a paid submission may buy
+    // instead of taking whatever priority order offers. Priority alone will
+    // spend on a keyword whose search volume is unknown, which is money bought
+    // for a measurement nothing can weight.
+    const trackedKeywordIds = Array.isArray(body.tracked_keyword_ids)
+      ? body.tracked_keyword_ids.flatMap((id: unknown) => {
+          const value = str(id);
+          return value ? [value] : [];
+        })
+      : undefined;
     const result = await p2service.runRankTick(config, env, {
       limit: num(body.limit) ?? 5,
+      collectLimit: num(body.collect_limit) ?? 10,
+      trackedKeywordIds,
     });
     return json(envelope(config, result, { providerStatus }));
+  }
+
+  // The SERP task lifecycle, readable. A queued task is paid work in flight,
+  // and "what did I buy and has it arrived" must be answerable without a SQL
+  // client — that question is exactly what phase 1 could not answer.
+  if (route === "rank-tasks" && method === "GET") {
+    const rows = await rankTasks.recentTasks(50);
+    return json(
+      envelope(
+        config,
+        {
+          tasks: rows.map((task) => ({
+            id: task.id,
+            job_id: task.jobId,
+            tracked_keyword_id: task.trackedKeywordId,
+            entity_id: task.entityId,
+            // Abbreviated: enough to correlate with the provider, never the
+            // whole opaque id in a response that may be logged.
+            provider_task_id: task.providerTaskId
+              ? `${task.providerTaskId.slice(0, 8)}…`
+              : null,
+            keyword: task.keyword,
+            target_domain: task.targetDomain,
+            location_code: task.locationCode,
+            language_code: task.languageCode,
+            device: task.device,
+            search_engine: task.searchEngine,
+            collection_window: task.collectionWindow,
+            status: task.status,
+            attempt_count: task.attemptCount,
+            submitted_at: task.submittedAt,
+            next_check_at: task.nextCheckAt,
+            last_checked_at: task.lastCheckedAt,
+            completed_at: task.completedAt,
+            error_origin: task.errorOrigin,
+            error_class: task.errorClass,
+            error_code: task.errorCode,
+            endpoint: task.endpoint,
+          })),
+        },
+        { providerStatus },
+      ),
+    );
+  }
+
+  // Redeem one named receipt. The deliberate counterpart to the attempt cap:
+  // automatic collection stops so it cannot poll forever, and this collects the
+  // result anyway once the provider reports the task complete. Free, and it
+  // cannot buy anything — no keyword is selected and no job is created.
+  if (route === "rank-recover" && method === "POST") {
+    const body = await readJson(request);
+    const taskId = str(body.task_id);
+    if (!taskId) return json({ error: "task_id is required" }, 400);
+    const result = await rankRecovery.recoverRankTaskById(config, taskId);
+    return json(envelope(config, result, { providerStatus }));
+  }
+
+  {
+    const handled = await dispatchKeywordVolume(ctx);
+    if (handled) return handled;
   }
 
   if (route === "share-recalculate" && method === "POST") {
@@ -341,6 +417,14 @@ async function dispatchP2Operations(
   if (route === "rank-jobs" && method === "GET") {
     const jobs = await p2jobs.recentJobs(50);
     return json(envelope(config, { jobs }, { providerStatus }));
+  }
+
+  // Promote the seed watchlist into editable configuration. Re-runnable: it
+  // reports skips rather than creating duplicates, and never touches a row an
+  // operator has since changed.
+  if (route === "bootstrap-keywords" && method === "POST") {
+    const result = await bootstrapTrackedKeywords();
+    return json(envelope(config, result, { providerStatus }));
   }
 
   if (route === "seed-clusters" && method === "POST") {

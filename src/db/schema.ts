@@ -11,6 +11,7 @@ import * as sqliteTelemetry from "./telemetry.schema";
 import * as sqliteSearchIntelligence from "./search-intelligence.schema";
 import * as sqliteSearchIntelligenceP2 from "./search-intelligence-p2.schema";
 import * as sqliteSearchIntelligenceP3 from "./search-intelligence-p3.schema";
+import * as sqliteSearchIntelligenceP3Jobs from "./search-intelligence-p3-jobs.schema";
 import * as sqliteSearchIntelligenceP4 from "./search-intelligence-p4.schema";
 import * as sqliteSearchIntelligenceP5 from "./search-intelligence-p5.schema";
 import * as sqliteSearchIntelligenceP5Ai from "./search-intelligence-p5-ai.schema";
@@ -25,6 +26,7 @@ import * as pgTelemetry from "./pg/telemetry.schema";
 import * as pgSearchIntelligence from "./pg/search-intelligence.schema";
 import * as pgSearchIntelligenceP2 from "./pg/search-intelligence-p2.schema";
 import * as pgSearchIntelligenceP3 from "./pg/search-intelligence-p3.schema";
+import * as pgSearchIntelligenceP3Jobs from "./pg/search-intelligence-p3-jobs.schema";
 import * as pgSearchIntelligenceP4 from "./pg/search-intelligence-p4.schema";
 import * as pgSearchIntelligenceP5 from "./pg/search-intelligence-p5.schema";
 import * as pgSearchIntelligenceP5Ai from "./pg/search-intelligence-p5-ai.schema";
@@ -50,6 +52,7 @@ type AppSchema = typeof sqliteApp &
   typeof sqliteSearchIntelligence &
   typeof sqliteSearchIntelligenceP2 &
   typeof sqliteSearchIntelligenceP3 &
+  typeof sqliteSearchIntelligenceP3Jobs &
   typeof sqliteSearchIntelligenceP4 &
   typeof sqliteSearchIntelligenceP5 &
   typeof sqliteSearchIntelligenceP5Ai;
@@ -68,6 +71,7 @@ const runtimeSchema =
         ...pgSearchIntelligence,
         ...pgSearchIntelligenceP2,
         ...pgSearchIntelligenceP3,
+        ...pgSearchIntelligenceP3Jobs,
         ...pgSearchIntelligenceP4,
         ...pgSearchIntelligenceP5,
         ...pgSearchIntelligenceP5Ai,
@@ -84,6 +88,7 @@ const runtimeSchema =
         ...sqliteSearchIntelligence,
         ...sqliteSearchIntelligenceP2,
         ...sqliteSearchIntelligenceP3,
+        ...sqliteSearchIntelligenceP3Jobs,
         ...sqliteSearchIntelligenceP4,
         ...sqliteSearchIntelligenceP5,
         ...sqliteSearchIntelligenceP5Ai,
@@ -141,6 +146,8 @@ export const {
   rankingEvents,
   rankingJobs,
   phase2UsageLedger,
+  // MORGANA LOCAL PATCH (UPSTREAM.md, patch P12).
+  siRankTasks,
   // MORGANA LOCAL PATCH (UPSTREAM.md, patch P8).
   siBacklinks,
   siBacklinkSnapshots,

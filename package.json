@@ -51,7 +51,11 @@
     "cleanup:default-projects:d1": "tsx scripts/d1-default-project-cleanup.ts",
     "seed:rank-tracking": "tsx scripts/seed-rank-tracking.ts",
     "seed:projects": "tsx scripts/seed-projects.ts",
-    "ci:check": "prettier --check . && knip && tsc --noEmit && tsc --noEmit -p badseo/tsconfig.json && oxlint . --type-aware"
+    "ci:check": "prettier --check . && knip && tsc --noEmit && tsc --noEmit -p badseo/tsconfig.json && oxlint . --type-aware",
+    "lint:local": "oxlint . --type-aware --threads=2",
+    "check:local": "prettier --check . && knip && tsc --noEmit && tsc --noEmit -p badseo/tsconfig.json && npm run lint:local",
+    "test:targeted": "vitest run --config vitest.local.config.ts",
+    "check:ci": "npm run ci:check && npm run test:ci && vite build"
   },
   "cloudflare": {
     "bindings": {

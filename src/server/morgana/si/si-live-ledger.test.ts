@@ -12,11 +12,12 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
  * a snapshot written with real metrics, a job marked failed, and no ledger row.
  */
 
-/** The one ledger field these cases interrogate. */
+/** The ledger fields these cases interrogate. */
 interface UsageCall {
   costStatus?: string;
   actualCostMicros?: number;
   endpointPath: string;
+  costCentre?: string;
 }
 
 const collectDomainOverview = vi.fn();
@@ -273,5 +274,36 @@ describe("failure attribution", () => {
     expect(recorded).not.toContain("\n");
     // The code survives in a form that still identifies the fault.
     expect(recorded).toContain("40501");
+  });
+});
+
+/**
+ * Three collectors write to `search_usage_ledger` and it had no column saying
+ * which. The budget authority read the table as a whole and reported all of it
+ * under one name, so SERP ranking spend was attributed to Domain Overview and
+ * ranking itself showed a null cost — while having been paid for six times.
+ */
+describe("who spent it", () => {
+  it("labels a domain overview call as domain overview", async () => {
+    collectDomainOverview.mockResolvedValue(COLLECTED);
+    await runLiveDomainRefresh(INPUT);
+    const centres = recordUsage.mock.calls.map((c) => c[0].costCentre);
+    expect(centres.length).toBeGreaterThan(0);
+    expect(new Set(centres)).toEqual(new Set(["domain_overview"]));
+  });
+
+  it("labels a failed call too, because a failure can still be charged", async () => {
+    collectDomainOverview.mockRejectedValue(
+      new CollectorCallError("labs/domain_rank_overview", {
+        cause: Object.assign(new Error("boom"), {
+          name: "AppError",
+          code: "UPSTREAM_UNAVAILABLE",
+        }),
+      }),
+    );
+    await runLiveDomainRefresh(INPUT);
+    for (const call of recordUsage.mock.calls) {
+      expect(call[0].costCentre).toBe("domain_overview");
+    }
   });
 });

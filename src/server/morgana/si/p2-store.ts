@@ -111,6 +111,8 @@ interface CreateKeywordInput {
   locationCode?: number;
   languageCode?: string;
   alertingEnabled?: boolean;
+  /** `bootstrap` for a seeded row, `manual` for one a human added. */
+  createdSource?: "bootstrap" | "manual";
 }
 
 /**
@@ -148,6 +150,7 @@ export async function createTrackedKeyword(
     trackingEnabled: true,
     alertingEnabled: input.alertingEnabled ?? true,
     searchVolume: null,
+    createdSource: input.createdSource ?? "manual",
     lastCheckedAt: null,
     // Due immediately: a newly added keyword should be measured on the next
     // tick rather than waiting out a full interval.
@@ -176,6 +179,24 @@ export async function bulkImportKeywords(
     else skipped += 1;
   }
   return { created, skipped };
+}
+
+/**
+ * One tracked keyword by id.
+ *
+ * The live path needs this because it recomputes derived state for keywords a
+ * COLLECTION touched, which is a different set from the keywords a tick found
+ * due — a SERP bought two ticks ago lands now.
+ */
+export async function getTrackedKeyword(
+  id: string,
+): Promise<TrackedKeywordRow | null> {
+  const rows = await db
+    .select()
+    .from(trackedKeywords)
+    .where(eq(trackedKeywords.id, id))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export async function listTrackedKeywords(
@@ -233,6 +254,21 @@ export async function updateTrackedKeyword(
 export async function dueKeywords(
   limit: number,
   now: Date = new Date(),
+  /**
+   * Buy these keywords and no others.
+   *
+   * Priority order is the right DEFAULT policy and the wrong one for a single
+   * authorised purchase: the watchlist holds keywords whose search volume is
+   * unknown, and priority alone will happily spend on them. `critical` says
+   * "this matters to the brand"; it does not say "a measurement of it can be
+   * weighted by anything". An operator closing a specific coverage gap needs to
+   * name the keywords, exactly as `keyword-volume-refresh` already allows.
+   *
+   * Narrowing only: a named keyword must still be tracking-enabled and due, so
+   * this cannot be used to bypass the cadence or to re-buy something already
+   * collected today.
+   */
+  onlyIds?: readonly string[],
 ): Promise<TrackedKeywordRow[]> {
   const rows = await db
     .select()
@@ -244,7 +280,9 @@ export async function dueKeywords(
     normal: 2,
     low: 3,
   };
+  const wanted = onlyIds && onlyIds.length > 0 ? new Set(onlyIds) : null;
   return rows
+    .filter((r) => wanted === null || wanted.has(r.id))
     .filter(
       (r) =>
         !r.nextCheckAt || new Date(r.nextCheckAt).getTime() <= now.getTime(),
@@ -284,6 +322,19 @@ interface RecordRankInput {
   rankAbsolute: number | null;
   rankingUrl: string | null;
   provider: "dataforseo" | "fixture";
+  /** The host the ranking URL resolved to, after normalization. */
+  rankingDomain?: string | null;
+  /** The SERP element the position came from — `organic` for a real ranking. */
+  resultType?: string | null;
+  /**
+   * `partial` marks an observation the provider could not fully answer. It is
+   * stored so nothing downstream mistakes it for a measurement — in particular
+   * it can never confirm a lost ranking.
+   */
+  snapshotStatus?: "complete" | "partial";
+  snapshotStatusReason?: string | null;
+  /** The queued task this came from; the accounting correlation id. */
+  providerTaskId?: string | null;
   estimatedCostMicros?: number;
   actualCostMicros?: number;
   now?: Date;
@@ -311,6 +362,11 @@ export async function recordRank(input: RecordRankInput): Promise<boolean> {
         : null,
       // Absence is recorded as absence, never as a sentinel position.
       isFound: input.rankGroup !== null,
+      rankingDomain: input.rankingDomain ?? null,
+      resultType: input.resultType ?? null,
+      snapshotStatus: input.snapshotStatus ?? "complete",
+      snapshotStatusReason: input.snapshotStatusReason ?? null,
+      providerTaskId: input.providerTaskId ?? null,
       provider: input.provider,
       estimatedCostMicros: input.estimatedCostMicros ?? 0,
       actualCostMicros: input.actualCostMicros ?? 0,

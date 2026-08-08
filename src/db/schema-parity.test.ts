@@ -14,6 +14,8 @@ import * as sqliteTelemetry from "./telemetry.schema";
 // MORGANA LOCAL PATCH (UPSTREAM.md, patch P6).
 import * as sqliteSearchIntelligence from "./search-intelligence.schema";
 import * as sqliteSearchIntelligenceP2 from "./search-intelligence-p2.schema";
+import * as sqliteSearchIntelligenceVolume from "./search-intelligence-volume.schema";
+import * as sqliteBudget from "./search-intelligence-budget.schema";
 import * as sqliteSearchIntelligenceP3 from "./search-intelligence-p3.schema";
 import * as sqliteSearchIntelligenceP4 from "./search-intelligence-p4.schema";
 import * as sqliteSearchIntelligenceP5 from "./search-intelligence-p5.schema";
@@ -27,6 +29,7 @@ import * as pgReddit from "./pg/reddit-attribution.schema";
 import * as pgTelemetry from "./pg/telemetry.schema";
 import * as pgSearchIntelligence from "./pg/search-intelligence.schema";
 import * as pgSearchIntelligenceP2 from "./pg/search-intelligence-p2.schema";
+import * as pgBudget from "./pg/search-intelligence-budget.schema";
 import * as pgSearchIntelligenceP3 from "./pg/search-intelligence-p3.schema";
 import * as pgSearchIntelligenceP4 from "./pg/search-intelligence-p4.schema";
 import * as pgSearchIntelligenceP5 from "./pg/search-intelligence-p5.schema";
@@ -155,6 +158,8 @@ const sqliteAppTables = tablesFrom(
   sqliteTelemetry,
   sqliteSearchIntelligence,
   sqliteSearchIntelligenceP2,
+  sqliteSearchIntelligenceVolume,
+  sqliteBudget,
   sqliteSearchIntelligenceP3,
   sqliteSearchIntelligenceP4,
   sqliteSearchIntelligenceP5,
@@ -169,6 +174,7 @@ const pgAppTables = tablesFrom(
   pgTelemetry,
   pgSearchIntelligence,
   pgSearchIntelligenceP2,
+  pgBudget,
   pgSearchIntelligenceP3,
   pgSearchIntelligenceP4,
   pgSearchIntelligenceP5,

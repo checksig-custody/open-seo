@@ -4,6 +4,8 @@ import { siBacklinkUsageLedger } from "@/db/schema";
 import { newId, nowIso } from "./ids";
 import type { Phase0Config } from "../phase0-env";
 import { resolveProviderStatus } from "./service";
+import { WORST_CASE_BACKLINK_MICROS } from "./backlink-live-collector";
+import { authorizePaidOperation } from "./budget-authority";
 
 /**
  * Morgana Search Intelligence — phase 3 usage ledger and cost status.
@@ -41,6 +43,8 @@ interface UsageInput {
   cacheMisses?: number;
   estimatedCostMicros?: number;
   actualCostMicros?: number;
+  /** Correlates this ledger row with the reservation and the snapshot. */
+  operationId?: string | null;
 }
 
 /** Only these classes consume the paid budget. */
@@ -74,6 +78,9 @@ export async function recordBacklinkUsage(input: UsageInput): Promise<void> {
       cacheMisses: input.cacheMisses ?? 0,
       estimatedCostMicros: input.estimatedCostMicros ?? 0,
       actualCostMicros: input.actualCostMicros ?? 0,
+      // The ledger models "no operation" as the empty string, not NULL — a
+      // pre-existing choice of that table, followed here rather than changed.
+      operationId: input.operationId ?? "",
       createdAt: at,
       updatedAt: at,
     })
@@ -232,27 +239,53 @@ export async function backlinkCostStatus(
  */
 export async function backlinkBudgetAllows(
   config: Phase0Config,
-  options: { reservedForOtherPhasesUsd?: number; now?: Date } = {},
-): Promise<{ allowed: boolean; reason: string | null }> {
+  options: {
+    reservedForOtherPhasesUsd?: number;
+    now?: Date;
+    /** Identifies the operation, so a retry cannot reserve capacity twice. */
+    idempotencyKey?: string;
+    entityId?: string | null;
+    /** The domain being collected, and the sample size asked of it. */
+    target?: string | null;
+    sampleLimit?: number | null;
+    jobId?: string | null;
+    operationId?: string | null;
+  } = {},
+): Promise<{
+  allowed: boolean;
+  reason: string | null;
+  reservationId?: string;
+}> {
   const now = options.now ?? new Date();
-  const monthlyCap = config.SEO_DATAFORSEO_MONTHLY_COST_CAP_USD;
-  const dailyCap = config.SEO_DATAFORSEO_DAILY_COST_CAP_USD;
-  if (monthlyCap === 0 || dailyCap === 0) {
-    return {
-      allowed: false,
-      reason: "cost caps are zero; paid collection is disabled",
-    };
+
+  // THE ONE AUTHORITY. This function used to read `si_backlink_usage_ledger`
+  // and compare it against the shared cap — a correct answer to the wrong
+  // question, which is how a 0.0792 USD collection was allowed while the day
+  // had already spent 0.13476 elsewhere. It now asks the authority that sees
+  // every ledger, and holds capacity rather than merely looking at it.
+  const decision = await authorizePaidOperation(config, {
+    collector: "backlinks",
+    operationType: "backlink_collection",
+    worstCaseMicros: WORST_CASE_BACKLINK_MICROS,
+    // THE ENTITY BELONGS IN THE KEY, and for one deploy it was not there.
+    // `entityId` was accepted here and never passed by the only caller, so the
+    // key degraded to `backlinks|unknown|<hour>` — a bucket shared by every
+    // entity. Collecting a second domain inside the same UTC hour would have
+    // been refused as a duplicate of the first, which reads as "already paid
+    // for" when nothing of the kind had happened.
+    idempotencyKey:
+      options.idempotencyKey ??
+      `backlinks|${options.entityId ?? "unknown"}|${now.toISOString().slice(0, 13)}`,
+    subject: options.target ?? null,
+    subjectScope: options.sampleLimit ?? null,
+    jobId: options.jobId ?? null,
+    operationId: options.operationId ?? null,
+    providerConfigured: resolveProviderStatus(config, {}) !== "not_configured",
+    now,
+  });
+
+  if (!decision.allowed) {
+    return { allowed: false, reason: `${decision.code}: ${decision.reason}` };
   }
-  const [monthly, daily] = await Promise.all([
-    totals({ month: now.toISOString().slice(0, 7) }),
-    totals({ day: now.toISOString().slice(0, 10) }),
-  ]);
-  const reserved = options.reservedForOtherPhasesUsd ?? 0;
-  if (monthly.actualCostMicros / MICROS >= Math.max(0, monthlyCap - reserved)) {
-    return { allowed: false, reason: "monthly backlink allowance exhausted" };
-  }
-  if (daily.actualCostMicros / MICROS >= dailyCap) {
-    return { allowed: false, reason: "daily cost cap reached" };
-  }
-  return { allowed: true, reason: null };
+  return { allowed: true, reason: null, reservationId: decision.reservationId };
 }

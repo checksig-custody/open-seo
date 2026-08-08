@@ -375,3 +375,41 @@ export async function fetchLlmResponse(
   }
   return { data: result.data, billing: buildTaskBilling(task) };
 }
+
+// ---------------------------------------------------------------------------
+// LLM Responses model catalogue — FREE
+// ---------------------------------------------------------------------------
+
+/**
+ * MORGANA LOCAL PATCH (UPSTREAM.md, patch P20).
+ *
+ * DataForSEO documents this endpoint as non-billable: "Your account will not be
+ * charged for using this API." It is therefore the only way to ask whether the
+ * AI Optimization API answers for THIS account without buying something to find
+ * out — which matters because the alternative, a live `llm_responses` task,
+ * costs a base fee plus an unpublished LLM token charge.
+ *
+ * IT ANSWERS REACHABILITY, NOT ENTITLEMENT. A catalogue responding does not
+ * prove the account may call the billable surface, and callers must not report
+ * it as though it did.
+ */
+export async function fetchLlmModels(
+  slug: "chat_gpt" | "claude" | "gemini" | "perplexity",
+): Promise<number> {
+  const api = aiOptimizationApi(classifyAiSearchError);
+  const response =
+    slug === "chat_gpt"
+      ? await api.chatGptLlmResponsesModels()
+      : slug === "claude"
+        ? await api.claudeLlmResponsesModels()
+        : slug === "gemini"
+          ? await api.geminiLlmResponsesModels()
+          : await api.perplexityLlmResponsesModels();
+  const task = assertOk(
+    response,
+    assertOptions(`/v3/ai_optimization/${slug}/llm_responses/models`),
+  );
+  // Only the count travels out. The catalogue itself is provider data this
+  // engine has no use for, and returning it would invite it into a response.
+  return task.result?.length ?? 0;
+}

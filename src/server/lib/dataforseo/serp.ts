@@ -339,6 +339,78 @@ export async function fetchRankCheckTaskResult(input: {
   return { status: "completed", result: buildRankCheckResult(input, items) };
 }
 
+/**
+ * MORGANA LOCAL PATCH (see UPSTREAM.md, patch P12).
+ *
+ * Collect a queued task's raw SERP items instead of a pre-matched ranking.
+ *
+ * `fetchRankCheckTaskResult` above answers "did this domain rank", and answers
+ * it with `domain === target || domain.endsWith('.' + target)` — every
+ * subdomain counts, and the matched item is discarded once a position has been
+ * read off it. Morgana needs two things that shape cannot give:
+ *
+ *  - **Apex plus `www`, and nothing else.** `blog.checksig.com` ranking is not
+ *    checksig.com ranking, and taking the first subdomain match would report a
+ *    position for a property the watchlist does not track.
+ *  - **The matched item itself** — `rank_absolute` beside `rank_group`, and the
+ *    result type — because a rank recorded without the type it came from cannot
+ *    later be told apart from a featured snippet or a local pack.
+ *
+ * So this returns the parsed items and lets the caller decide, rather than
+ * duplicating the transport, the retry policy or the credential lookup, all of
+ * which stay exactly where they are. Deliberately NOT metered, for the same
+ * reason as `fetchRankCheckTaskResult`: collection is free because the task was
+ * charged at `task_post`, and metering it would bill the same work twice.
+ */
+type QueuedSerpOutcome =
+  | { status: "pending" }
+  | { status: "failed"; statusCode: number | null; message: string }
+  | { status: "completed"; items: SerpLiveItem[]; noResults: boolean };
+
+export async function fetchQueuedSerpItems(input: {
+  taskId: string;
+}): Promise<QueuedSerpOutcome> {
+  const response = await serpApi().googleOrganicTaskGetAdvanced(input.taskId);
+  const task = response?.tasks?.[0];
+  if (!response || response.status_code !== 20000 || !task) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      response?.status_message || "DataForSEO task_get failed",
+    );
+  }
+
+  if (
+    task.status_code !== undefined &&
+    TASK_IN_PROGRESS_STATUS_CODES.has(task.status_code)
+  ) {
+    return { status: "pending" };
+  }
+
+  if (task.status_code !== 20000) {
+    // "No Search Results" is a real answer for an obscure keyword, not a
+    // failure: the SERP was fetched and contained nothing to match against.
+    if (isNoResultsTask(task)) {
+      return { status: "completed", items: [], noResults: true };
+    }
+    return {
+      status: "failed",
+      statusCode: task.status_code ?? null,
+      message:
+        task.status_message || `DataForSEO task failed (${task.status_code})`,
+    };
+  }
+
+  return {
+    status: "completed",
+    items: parseTaskItems(
+      "google-organic-task-get-advanced",
+      task,
+      serpSnapshotItemSchema,
+    ),
+    noResults: false,
+  };
+}
+
 export async function fetchLocalSerp(input: {
   keyword: string;
   locationCoordinate?: string;

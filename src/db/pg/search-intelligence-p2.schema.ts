@@ -62,6 +62,7 @@ export const trackedKeywords = pgTable(
     trackingEnabled: boolean("tracking_enabled").notNull().default(true),
     alertingEnabled: boolean("alerting_enabled").notNull().default(true),
     searchVolume: integer("search_volume"),
+    createdSource: text("created_source").notNull().default("manual"),
     lastCheckedAt: timestampColumn("last_checked_at"),
     nextCheckAt: timestampColumn("next_check_at"),
     createdAt: timestampColumn("created_at").notNull().default(isoNow),
@@ -103,6 +104,13 @@ export const siRankSnapshots = pgTable(
     rankingUrl: text("ranking_url"),
     normalizedRankingUrl: text("normalized_ranking_url"),
     isFound: boolean("is_found").notNull(),
+    rankingDomain: text("ranking_domain"),
+    resultType: text("result_type"),
+    snapshotStatus: text("snapshot_status", { enum: ["complete", "partial"] })
+      .notNull()
+      .default("complete"),
+    snapshotStatusReason: text("snapshot_status_reason"),
+    providerTaskId: text("provider_task_id"),
     provider: text("provider", { enum: ["dataforseo", "fixture"] }).notNull(),
     estimatedCostMicros: integer("estimated_cost_micros").notNull().default(0),
     actualCostMicros: integer("actual_cost_micros").notNull().default(0),
@@ -148,6 +156,7 @@ export const keywordGapSnapshots = pgTable(
     bestCompetitorRank: integer("best_competitor_rank"),
     bestCompetitorEntityId: text("best_competitor_entity_id"),
     opportunityScore: real("opportunity_score"),
+    opportunityScoreReason: text("opportunity_score_reason"),
     createdAt: timestampColumn("created_at").notNull().default(isoNow),
   },
   (table) => [
@@ -177,6 +186,11 @@ export const shareOfSearchSnapshots = pgTable(
     reason: text("reason"),
     keywordsConsidered: integer("keywords_considered").notNull().default(0),
     keywordsCovered: integer("keywords_covered").notNull().default(0),
+    eligibleKeywords: integer("eligible_keywords").notNull().default(0),
+    excludedKeywords: integer("excluded_keywords").notNull().default(0),
+    exclusionReasons: text("exclusion_reasons"),
+    coverage: real("coverage"),
+    calculatedAt: text("calculated_at"),
     ctrModelVersion: text("ctr_model_version").notNull(),
     createdAt: timestampColumn("created_at").notNull().default(isoNow),
   },
@@ -285,5 +299,113 @@ export const phase2UsageLedger = pgTable(
   },
   (table) => [
     uniqueIndex("phase2_usage_ledger_day_job_idx").on(table.day, table.jobType),
+  ],
+);
+
+export const siRankTasks = pgTable(
+  "si_rank_tasks",
+  {
+    id: text("id").primaryKey(),
+    jobId: text("job_id"),
+    trackedKeywordId: text("tracked_keyword_id")
+      .notNull()
+      .references(() => trackedKeywords.id, { onDelete: "cascade" }),
+    entityId: text("entity_id")
+      .notNull()
+      .references(() => searchEntities.id, { onDelete: "cascade" }),
+    providerTaskId: text("provider_task_id"),
+    keyword: text("keyword").notNull(),
+    targetDomain: text("target_domain").notNull(),
+    locationCode: integer("location_code").notNull(),
+    languageCode: text("language_code").notNull(),
+    device: text("device", { enum: ["desktop", "mobile"] }).notNull(),
+    searchEngine: text("search_engine").notNull().default("google"),
+    collectionWindow: text("collection_window").notNull(),
+    status: text("status", {
+      enum: [
+        "queued",
+        "submitting",
+        "submitted",
+        "waiting",
+        "ready",
+        "fetching",
+        "normalizing",
+        "succeeded",
+        "skipped",
+        // Local polling gave up; the provider task may still be alive and the
+        // receipt is still valid. Recoverable by explicit request only.
+        "recovery_pending",
+        "failed",
+      ],
+    }).notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+    submittedAt: timestampColumn("submitted_at"),
+    nextCheckAt: timestampColumn("next_check_at"),
+    lastCheckedAt: timestampColumn("last_checked_at"),
+    completedAt: timestampColumn("completed_at"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    errorOrigin: text("error_origin"),
+    errorClass: text("error_class"),
+    errorCode: text("error_code"),
+    endpoint: text("endpoint"),
+    snapshotId: text("snapshot_id"),
+    createdAt: timestampColumn("created_at").notNull().default(isoNow),
+    updatedAt: timestampColumn("updated_at").notNull().default(isoNow),
+  },
+  (table) => [
+    uniqueIndex("si_rank_tasks_dedupe_idx").on(table.dedupeKey),
+    index("si_rank_tasks_status_idx").on(table.status, table.nextCheckAt),
+    index("si_rank_tasks_provider_idx").on(table.providerTaskId),
+    index("si_rank_tasks_keyword_idx").on(
+      table.trackedKeywordId,
+      table.collectionWindow,
+    ),
+  ],
+);
+
+/**
+ * A measured search volume, kept as history (Postgres mirror of the D1 table).
+ *
+ * NULL volume = the provider did not say. 0 = the provider said zero.
+ */
+export const siKeywordVolumeSnapshots = pgTable(
+  "si_keyword_volume_snapshots",
+  {
+    id: text("id").primaryKey(),
+    trackedKeywordId: text("tracked_keyword_id")
+      .notNull()
+      .references(() => trackedKeywords.id, { onDelete: "cascade" }),
+    keyword: text("keyword").notNull(),
+    locationCode: integer("location_code").notNull(),
+    languageCode: text("language_code").notNull(),
+    searchEngine: text("search_engine").notNull().default("google"),
+    searchVolume: integer("search_volume"),
+    competition: real("competition"),
+    competitionLevel: text("competition_level"),
+    costPerClickMicros: integer("cost_per_click_micros"),
+    keywordDifficulty: integer("keyword_difficulty"),
+    searchIntent: text("search_intent"),
+    provider: text("provider").notNull(),
+    source: text("source", { enum: ["dataforseo", "fixture"] }).notNull(),
+    collectedAt: text("collected_at").notNull(),
+    collectionWindow: text("collection_window").notNull(),
+    snapshotStatus: text("snapshot_status", {
+      enum: ["complete", "partial", "no_data"],
+    })
+      .notNull()
+      .default("complete"),
+    snapshotStatusReason: text("snapshot_status_reason"),
+    jobId: text("job_id"),
+    providerResponseId: text("provider_response_id"),
+    dedupeKey: text("dedupe_key").notNull(),
+    createdAt: timestampColumn("created_at").notNull().default(isoNow),
+  },
+  (table) => [
+    uniqueIndex("si_keyword_volume_dedupe_idx").on(table.dedupeKey),
+    index("si_keyword_volume_keyword_idx").on(
+      table.trackedKeywordId,
+      table.collectedAt,
+    ),
+    index("si_keyword_volume_window_idx").on(table.collectionWindow),
   ],
 );

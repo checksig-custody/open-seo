@@ -61,6 +61,28 @@ interface GapResult {
   bestCompetitorEntityId: string | null;
   /** Null when volume is unknown — never a zero standing in for "no idea". */
   opportunityScore: number | null;
+  /**
+   * Why the score is absent, when it is.
+   *
+   * A null score and a zero score look alike in a table and mean opposite
+   * things — "we cannot say" versus "there is nothing to gain". The reason is
+   * what lets a reader tell them apart without knowing the formula.
+   */
+  opportunityScoreReason: string | null;
+}
+
+/** The two score fields, computed once so they can never disagree. */
+function scoreFields(
+  searchVolume: number | null,
+  primaryRank: number | null,
+  bestCompetitorRank: number | null,
+): { opportunityScore: number | null; opportunityScoreReason: string | null } {
+  const { score, reason } = scoreWithReason(
+    searchVolume,
+    primaryRank,
+    bestCompetitorRank,
+  );
+  return { opportunityScore: score, opportunityScoreReason: reason };
 }
 
 const rankOf = (o: Observation | undefined): number | null =>
@@ -101,7 +123,7 @@ export function classifyGap(input: GapInput): GapResult {
     primaryRank,
     bestCompetitorRank: competitor?.rank ?? null,
     bestCompetitorEntityId: competitor?.entityId ?? null,
-    opportunityScore: opportunityScore(
+    ...scoreFields(
       input.searchVolume ?? null,
       primaryRank,
       competitor?.rank ?? null,
@@ -157,7 +179,41 @@ export function opportunityScore(
   primaryRank: number | null,
   bestCompetitorRank: number | null,
 ): number | null {
-  if (searchVolume === null) return null;
+  return scoreWithReason(searchVolume, primaryRank, bestCompetitorRank).score;
+}
+
+/**
+ * The score and, when there isn't one, the missing input.
+ *
+ * Every refusal names a specific absent fact rather than defaulting: an unknown
+ * volume cannot be weighted, and a volume of zero has nothing to weight —
+ * different reasons, both honest, neither invented.
+ */
+function scoreWithReason(
+  searchVolume: number | null,
+  primaryRank: number | null,
+  bestCompetitorRank: number | null,
+): { score: number | null; reason: string | null } {
+  if (searchVolume === null) {
+    return { score: null, reason: "search_volume_unknown" };
+  }
+  if (searchVolume === 0) {
+    return { score: null, reason: "search_volume_zero" };
+  }
+  if (primaryRank === null && bestCompetitorRank === null) {
+    return { score: null, reason: "no_comparable_ranking" };
+  }
+  return {
+    score: rawOpportunityScore(searchVolume, primaryRank, bestCompetitorRank),
+    reason: null,
+  };
+}
+
+function rawOpportunityScore(
+  searchVolume: number,
+  primaryRank: number | null,
+  bestCompetitorRank: number | null,
+): number {
   if (bestCompetitorRank === null) return 0;
   // Not ranking at all is treated as the full addressable gap.
   const gap =
@@ -207,12 +263,35 @@ interface SosEntityResult {
   share: number | null;
 }
 
+/**
+ * Why keywords were dropped before weighting.
+ *
+ * Counted separately because they are different problems with different fixes:
+ * `volumeUnknown` is a collection gap (nobody has measured it),
+ * `volumeZero` is a watchlist decision (nobody searches it), and `noPosition`
+ * is a ranking gap (we have never seen where anyone stands). A single
+ * "excluded" number would hide which of the three is actually blocking the
+ * answer.
+ */
+interface SosExclusions {
+  volumeUnknown: number;
+  volumeZero: number;
+  noPosition: number;
+}
+
 interface SosResult {
   status: "ok" | "insufficient_data";
   reason?: string;
   ctrModelVersion: string;
   keywordsConsidered: number;
   keywordsCovered: number;
+  /** Volume known and above zero: the keywords that could carry weight. */
+  eligibleKeywords: number;
+  excludedKeywords: number;
+  exclusions: SosExclusions;
+  /** Covered / eligible. Null when nothing was eligible to cover. */
+  coverage: number | null;
+  calculatedAt: string;
   results: SosEntityResult[];
 }
 
@@ -234,12 +313,36 @@ export function computeShareOfSearch(
   keywords: readonly SosKeyword[],
   entityIds: readonly string[],
 ): SosResult {
+  const calculatedAt = new Date().toISOString();
+
+  // Counted before anything is filtered, so the shortfall is always
+  // attributable to a specific missing input rather than to "not enough data".
+  const usable = keywords.filter(
+    (k) => k.searchVolume !== null && k.searchVolume > 0,
+  );
+  const covered = usable.filter((k) =>
+    k.observations.some((o) => o.isFound && o.rankGroup !== null),
+  );
+  const exclusions: SosExclusions = {
+    volumeUnknown: keywords.filter((k) => k.searchVolume === null).length,
+    volumeZero: keywords.filter((k) => k.searchVolume === 0).length,
+    noPosition: usable.length - covered.length,
+  };
+  const excludedKeywords =
+    exclusions.volumeUnknown + exclusions.volumeZero + exclusions.noPosition;
+  const coverage = usable.length === 0 ? null : covered.length / usable.length;
+
   const insufficient = (reason: string): SosResult => ({
     status: "insufficient_data",
     reason,
     ctrModelVersion: CTR_MODEL_VERSION,
     keywordsConsidered: keywords.length,
-    keywordsCovered: 0,
+    keywordsCovered: covered.length,
+    eligibleKeywords: usable.length,
+    excludedKeywords,
+    exclusions,
+    coverage,
+    calculatedAt,
     results: entityIds.map((entityId) => ({
       entityId,
       visibilityScore: 0,
@@ -250,22 +353,21 @@ export function computeShareOfSearch(
   if (entityIds.length === 0) return insufficient("no domains selected");
   if (keywords.length === 0) return insufficient("no tracked keywords");
 
-  const usable = keywords.filter(
-    (k) => k.searchVolume !== null && k.searchVolume > 0,
-  );
-  if (usable.length === 0)
-    return insufficient("no keyword has a search volume");
+  if (usable.length === 0) {
+    // Distinguish "nobody has measured any volume" from "every tracked keyword
+    // genuinely has none" — the first is a collection gap, the second is a
+    // watchlist that needs different keywords.
+    return insufficient(
+      exclusions.volumeZero > 0 && exclusions.volumeUnknown === 0
+        ? "every tracked keyword has a measured volume of zero"
+        : "no keyword has a search volume",
+    );
+  }
 
-  const covered = usable.filter((k) =>
-    k.observations.some((o) => o.isFound && o.rankGroup !== null),
-  );
-  if (covered.length / usable.length < MIN_COVERAGE) {
-    return {
-      ...insufficient(
-        "fewer than half of the tracked keywords have a position",
-      ),
-      keywordsCovered: covered.length,
-    };
+  if ((coverage ?? 0) < MIN_COVERAGE) {
+    return insufficient(
+      "fewer than half of the keywords with a volume have a position",
+    );
   }
 
   const scores = new Map(entityIds.map((id) => [id, 0]));
@@ -284,18 +386,18 @@ export function computeShareOfSearch(
   }
 
   const total = [...scores.values()].reduce((a, b) => a + b, 0);
-  if (total <= 0) {
-    return {
-      ...insufficient("no domain has any visible position"),
-      keywordsCovered: covered.length,
-    };
-  }
+  if (total <= 0) return insufficient("no domain has any visible position");
 
   return {
     status: "ok",
     ctrModelVersion: CTR_MODEL_VERSION,
-    keywordsConsidered: usable.length,
+    keywordsConsidered: keywords.length,
     keywordsCovered: covered.length,
+    eligibleKeywords: usable.length,
+    excludedKeywords,
+    exclusions,
+    coverage,
+    calculatedAt,
     results: entityIds.map((entityId) => {
       const score = scores.get(entityId) ?? 0;
       return { entityId, visibilityScore: score, share: score / total };

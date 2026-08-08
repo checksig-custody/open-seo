@@ -52,6 +52,27 @@ export interface CollectionAccounting {
   freeRequests: number;
 }
 
+/**
+ * Read what the provider said one call cost.
+ *
+ * Shared so every collector reads a provider cost the same way. A value that is
+ * not a finite non-negative number is a GAP, not a zero: `NaN` used to survive
+ * from here to the ledger's `col + ?` binding, which D1 rejects, and the
+ * observed result was a snapshot with real metrics beside no ledger row at all
+ * — the record of money already spent, lost.
+ */
+export function readProviderCost(billing: { costUsd?: number } | undefined): {
+  micros: number | null;
+  status: CostStatus;
+} {
+  const usd = billing?.costUsd;
+  if (typeof usd !== "number" || !Number.isFinite(usd) || usd < 0) {
+    return { micros: null, status: "not_reported" };
+  }
+  const micros = Math.round(usd * 1_000_000);
+  return { micros, status: micros === 0 ? "zero" : "reported" };
+}
+
 /** The zero record: no call was made, so nothing is owed and nothing is known. */
 export const NO_CALLS: CollectionAccounting = {
   estimatedCostMicros: 0,

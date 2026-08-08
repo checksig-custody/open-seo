@@ -197,6 +197,30 @@ interface SnapshotInput {
   provider: string;
   estimatedCostMicros: number;
   actualCostMicros: number;
+  /**
+   * What a real collection knows about itself.
+   *
+   * Without these the row defaults to `source: "fixture"` and a null sample —
+   * which is how a live snapshot ended up labelled as a fixture in production
+   * while holding 1611 real backlinks. A row that misreports its own
+   * provenance is worse than a missing row.
+   */
+  source?: "dataforseo" | "fixture";
+  snapshotStatus?: "complete" | "partial" | "no_data";
+  snapshotStatusReason?: string | null;
+  sampleLimit?: number | null;
+  datasetCoverage?: number | null;
+  reportedBacklinkTotal?: number | null;
+  reportedReferringDomainTotal?: number | null;
+  datasetSignature?: string | null;
+  costStatus?: string | null;
+  providerReportedCostMicros?: number | null;
+  /**
+   * The pass this snapshot came from. Shared with the ledger row and the budget
+   * reservation, so "what did this collection cost" is a join rather than a
+   * correlation by timestamp.
+   */
+  operationId?: string | null;
 }
 
 export async function saveSnapshot(input: SnapshotInput): Promise<void> {
@@ -208,6 +232,17 @@ export async function saveSnapshot(input: SnapshotInput): Promise<void> {
       entityId: input.entityId,
       snapshotAt: at,
       snapshotDate: input.snapshotDate,
+      source: input.source ?? "fixture",
+      snapshotStatus: input.snapshotStatus ?? "complete",
+      snapshotStatusReason: input.snapshotStatusReason ?? null,
+      sampleLimit: input.sampleLimit ?? null,
+      datasetCoverage: input.datasetCoverage ?? null,
+      reportedBacklinkTotal: input.reportedBacklinkTotal ?? null,
+      reportedReferringDomainTotal: input.reportedReferringDomainTotal ?? null,
+      datasetSignature: input.datasetSignature ?? null,
+      costStatus: input.costStatus ?? null,
+      providerReportedCostMicros: input.providerReportedCostMicros ?? null,
+      operationId: input.operationId ?? null,
       backlinkCount: input.backlinkCount,
       referringDomainCount: input.referringDomainCount,
       dofollowCount: input.dofollowCount,

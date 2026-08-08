@@ -12,6 +12,64 @@ import type { Phase0Config } from "../phase0-env";
 const SI_API_VERSION = "2026-08-06";
 export const SI_PATH_PREFIX = "/internal/si/";
 
+/**
+ * WHAT `provider_status` MEANS ON THE WIRE, which is not what it means inside.
+ *
+ * Internally `fixture` is the spend posture "a credential we may not use" —
+ * paid calls are off. On the wire the same word says something entirely
+ * different to the client: THIS DATA IS SYNTHETIC. Morgana refuses a `fixture`
+ * payload in production, correctly, because showing invented numbers as though
+ * they were measurements is the one failure this subsystem cannot have.
+ *
+ * Those two meanings collided the moment the product surfaces were switched on
+ * with paid calls off — the correct posture. Every read of REAL STORED ROWS was
+ * being stamped `fixture` and refused, so an entire finished product reported
+ * itself as synthetic because the collector behind it was idle.
+ *
+ * A credential is present in both `fixture` and `live`, so the only difference
+ * between them is whether new collection may happen — a fact about the FUTURE,
+ * not about the rows in this response. `read_only` says exactly that, and
+ * leaves `fixture` to mean what the client always thought it meant.
+ *
+ * Nothing that decides whether to spend reads this value; the collectors take
+ * the internal status directly. This is a rename at the boundary, and it can
+ * therefore not loosen a budget guard.
+ */
+/**
+ * Does this response actually contain a synthetic fact?
+ *
+ * `providerStatus` describes whether a future collection may spend. It cannot
+ * establish the provenance of a row read from D1. Keep the scan deliberately
+ * narrow: only explicit provenance fields count, never an arbitrary string in
+ * a title, URL or keyword.
+ */
+function containsFixtureProvenance(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsFixtureProvenance);
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  if (
+    record.source === "fixture" ||
+    record.provider === "fixture" ||
+    record.provider_status === "fixture"
+  ) {
+    return true;
+  }
+  return Object.values(record).some(containsFixtureProvenance);
+}
+
+function reportedProviderStatus(
+  status: string | undefined,
+  data: unknown,
+): string {
+  if (status === undefined) return "unknown";
+  // A paused collector is not synthetic data. Conversely, a genuine fixture
+  // row must retain its fixture envelope so Morgana's production guard rejects
+  // it at the single client choke point.
+  return status === "fixture" && !containsFixtureProvenance(data)
+    ? "read_only"
+    : status;
+}
+
 interface EnvelopeMeta {
   cacheStatus?: "hit" | "miss" | "not_applicable";
   providerStatus?: string;
@@ -37,7 +95,7 @@ export function envelope(
     data,
     fetched_at: new Date().toISOString(),
     cache_status: meta.cacheStatus ?? "not_applicable",
-    provider_status: meta.providerStatus ?? "unknown",
+    provider_status: reportedProviderStatus(meta.providerStatus, data),
     cost_estimated_usd: meta.costEstimatedUsd ?? 0,
     cost_actual_usd: meta.costActualUsd ?? 0,
   };

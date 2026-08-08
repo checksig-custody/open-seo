@@ -1,0 +1,24 @@
+-- A reservation that records what it authorised, not only how much.
+--
+-- WHY THIS EXISTS. `si_budget_reservations` could answer "how much capacity is
+-- held" and nothing else. A row read back after the fact says
+-- `backlinks / backlink_collection / 100000` — which domain was bought, and how
+-- many rows were asked for, were recoverable only by correlating timestamps
+-- against a snapshot table. That is not an audit trail; it is a guess with a
+-- good success rate.
+--
+-- It matters here specifically because Backlinks charges PER RETURNED ROW on
+-- top of a per-request base — the finding that made one collection cost
+-- 79 236 µUSD against a modelled 25 000. An estimate is only checkable against
+-- the sample size it assumed, so the sample size belongs on the reservation
+-- that carried the estimate.
+--
+-- `subject` is deliberately generic rather than `target_domain`: the next
+-- collector to reserve is a SERP task, whose subject is a keyword. A column
+-- named for the first caller would have been renamed by the second.
+--
+-- Additive and forward-only. Two nullable columns; every existing row keeps
+-- its meaning, and NULL reads as "this operation stated no subject" rather
+-- than as an empty one.
+ALTER TABLE `si_budget_reservations` ADD `subject` text;--> statement-breakpoint
+ALTER TABLE `si_budget_reservations` ADD `subject_scope` integer;

@@ -1,3 +1,5 @@
+import { RANK_FREQUENCY_HOURS } from "./scheduler-policy";
+
 /**
  * Morgana Search Intelligence — keyword normalisation and clustering.
  *
@@ -30,16 +32,7 @@ export function isValidKeyword(input: string): boolean {
 
 /** Scheduled check interval, derived from priority (§7 cadences). */
 export function frequencyHoursFor(priority: Priority): number {
-  switch (priority) {
-    case "critical":
-      return 24;
-    case "high":
-      return 56; // three times a week
-    case "normal":
-      return 168;
-    case "low":
-      return 336;
-  }
+  return RANK_FREQUENCY_HOURS[priority];
 }
 
 /** Weight applied to a keyword's Share-of-Search contribution. */

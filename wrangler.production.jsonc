@@ -177,8 +177,8 @@
     //
     // Turning it back on is one line plus a deploy, and the caps below already
     // bound what it can do. Do that when phase 2 has a collector to run.
-    "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "false",
-    "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED": "false",
+    "SEARCH_INTELLIGENCE_PAID_CALLS_ENABLED": "true",
+    "SEARCH_INTELLIGENCE_SITE_AUDIT_SCHEDULER_ENABLED": "true",
     "SEARCH_INTELLIGENCE_SITE_AUDIT_ALERTS_ENABLED": "false",
     "SEARCH_INTELLIGENCE_AI_VISIBILITY_ALERTS_ENABLED": "false",
     "SEARCH_INTELLIGENCE_AI_VISIBILITY_LIVE_PROVIDER_ENABLED": "false",
@@ -197,11 +197,24 @@
     // Kept at the calibration figures even though paid calls are off: they are
     // the values the first real collection should run under, and env validation
     // will refuse to enable paid calls without them.
-    "SEO_DATAFORSEO_DAILY_COST_CAP_USD": "0.20",
-    "SEO_DATAFORSEO_MONTHLY_COST_CAP_USD": "2.00",
+    "SEO_DATAFORSEO_DAILY_COST_CAP_USD": "1.00",
+    "SEO_DATAFORSEO_MONTHLY_COST_CAP_USD": "20.00",
 
     "SEARCH_INTELLIGENCE_ENVIRONMENT": "production",
     "SEARCH_INTELLIGENCE_API_VERSION": "2026-08-05",
+    // WHICH DataForSEO account this deploy talks to. A label, not a credential:
+    // it is not derived from the secret, not reversible to it, authenticates
+    // nothing and is safe to print. Search Intelligence ran on a second trial
+    // until DataForSEO suspended it with 40201; it now shares the first,
+    // official, paid account with Brand Monitoring. Both eras have spend in the
+    // same ledger, so without this marker "the trial cost 335 472 uUSD" and
+    // "this account has cost us nothing yet" are indistinguishable.
+    //
+    // The credential PATHS stay separate regardless:
+    // DATAFORSEO_SEARCH_INTELLIGENCE_API_KEY here, DATAFORSEO_LOGIN /
+    // DATAFORSEO_PASSWORD in Morgana, with no fallback in either direction, so
+    // the accounts can be split again later without a refactor.
+    "SEARCH_INTELLIGENCE_PROVIDER_ACCOUNT_GENERATION": "official_account_2026_08",
 
     // Provenance, surfaced by /internal/status so the deployed artifact can be
     // tied to an upstream release without trusting a build log.

@@ -282,6 +282,28 @@ export const searchUsageLedger = sqliteTable(
      * deduplicating and turn one aggregate row into one row per call.
      */
     jobId: text("job_id").notNull().default(""),
+    /**
+     * WHICH COLLECTOR SPENT THIS, as a stored fact rather than a guess.
+     *
+     * Three cost centres share this table — the phase-1 Domain Overview, SERP
+     * ranking and Keyword Volume — and until this column existed they were
+     * distinguishable only by `endpoint_path`. The budget authority read the
+     * table as a whole and labelled all of it `domain_overview`, so ranking
+     * spend was reported against a collector that had not made the call, and
+     * the collector that had reported zero forever.
+     *
+     * Deliberately NOT a fix by moving rows to another table: `actual_cost_micros`
+     * is what the global cap is summed from, and a cost centre is a label on
+     * money, not a place to put it. Splitting the READ keeps the total invariant
+     * by construction.
+     *
+     * Nullable, and null means "written before this column existed" — which the
+     * backfill in `0049` resolves from `endpoint_path`, the only reliable
+     * correlation those rows carry.
+     */
+    costCentre: text("cost_centre", {
+      enum: ["domain_overview", "ranking", "keyword_volume", "ai_visibility"],
+    }),
     /** DataForSEO path, joined with '/'. */
     endpointPath: text("endpoint_path").notNull(),
     meteringClass: text("metering_class", {
